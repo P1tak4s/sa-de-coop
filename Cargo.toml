@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["proto", "relay", "coopnet", "launcher"]
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

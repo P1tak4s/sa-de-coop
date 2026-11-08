@@ -1,0 +1,13 @@
+target/
+dist/
+game/coopnet64.asi
+ui-research/
+re/
+
+# menu mod: extracted/modified Rockstar assets never committed; only tool source
+menu-mod/work/
+menu-mod/extracted/
+menu-mod/out/
+menu-mod/tool/bin/
+menu-mod/tool/obj/
+menu-mod/publish/
