@@ -54,7 +54,7 @@ fn copy_tree(from: &Path, to: &Path, log: &mut Vec<String>) -> std::io::Result<(
             // another mod's ASI loader under the same name: keep a copy instead of losing it
             if entry.file_name() == "version.dll" && dst.is_file() && std::fs::read(&dst)? != std::fs::read(entry.path())? {
                 std::fs::copy(&dst, dst.with_extension("dll.sa-coop-backup"))?;
-                log.push("Ankstesnis version.dll išsaugotas kaip version.dll.sa-coop-backup".into());
+                log.push("Previous version.dll kept as version.dll.sa-coop-backup".into());
             }
             std::fs::copy(entry.path(), &dst)?;
         }
@@ -65,15 +65,15 @@ fn copy_tree(from: &Path, to: &Path, log: &mut Vec<String>) -> std::io::Result<(
 fn install(game: &Path) -> Result<Vec<String>, String> {
     let src = bundle_dir();
     if !src.join("coopnet64.asi").is_file() {
-        return Err(format!("Nerastas modo paketas: {}", src.display()));
+        return Err(format!("Mod package not found: {}", src.display()));
     }
     let mut log = vec![];
-    copy_tree(&src, game, &mut log).map_err(|e| format!("Nepavyko nukopijuoti: {e}"))?;
+    copy_tree(&src, game, &mut log).map_err(|e| format!("Copy failed: {e}"))?;
     // files of older versions: a second copy of the DLL would run its own, separate network
     for old in ["coopnet64.dll", r"CLEO\sa-coop.js", r"CLEO\coop-test.js", r"CLEO\mano-masina.js"] {
         let _ = std::fs::remove_file(game.join(old));
     }
-    log.push("Modas įdiegtas.".into());
+    log.push("Mod installed.".into());
     extras(game, &mut log);
     Ok(log)
 }
@@ -85,7 +85,7 @@ fn build_menu_pak(extra: &Path, gameface: &Path, mods: &Path) -> Result<(), Stri
     const REL: &str = "Gameface/Content/SanAndreas/UI/MenuTemplates";
     let (repak, patch) = (extra.join("repak.exe"), extra.join("MenuPatch.exe"));
     if !repak.is_file() || !patch.is_file() {
-        return Err("trūksta repak.exe arba MenuPatch.exe".into());
+        return Err("repak.exe or MenuPatch.exe is missing".into());
     }
     let pak = gameface.join(r"Content\Paks\pakchunk0-WindowsNoEditor.pak");
     let tmp = std::env::temp_dir().join("sa-coop-menu");
@@ -120,13 +120,13 @@ fn extras(win64: &Path, log: &mut Vec<String>) {
     let Some(gameface) = win64.parent().and_then(|p| p.parent()) else { return };
     let mods = gameface.join(r"Content\Paks\~mods");
     match build_menu_pak(&extra, gameface, &mods) {
-        Ok(()) => log.push("„co-op“ įrašas meniu įdiegtas.".into()),
-        Err(e) => log.push(format!("„co-op“ meniu įrašo nepavyko sukurti: {e}")),
+        Ok(()) => log.push("Co-op menu entry installed.".into()),
+        Err(e) => log.push(format!("Could not create the co-op menu entry: {e}")),
     }
     if let Some(docs) = std::env::var_os("USERPROFILE").map(|u| PathBuf::from(u).join(r"Documents\Rockstar Games\GTA San Andreas Definitive Edition\Config\WindowsNoEditor")) {
         let ini = docs.join("Engine.ini");
         if !ini.exists() && extra.join("Engine.ini").is_file() && std::fs::create_dir_all(&docs).is_ok() && std::fs::copy(extra.join("Engine.ini"), &ini).is_ok() {
-            log.push("Grafikos patobulinimai įjungti (Engine.ini).".into());
+            log.push("Graphics improvements on (Engine.ini).".into());
         }
     }
     let fonts = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join(r"sa-de-coop\fonts");
@@ -142,7 +142,7 @@ fn extras(win64: &Path, log: &mut Vec<String>) {
                 .output();
             if let Ok(o) = out {
                 if o.status.success() && o.stdout.len() > 1000 && std::fs::write(fonts.join(format!("{f}.ttf")), &o.stdout).is_ok() {
-                    log.push(format!("Šriftas {f} paimtas iš žaidimo."));
+                    log.push(format!("Font {f} taken from the game."));
                 }
             }
         }
@@ -191,13 +191,13 @@ struct App {
 
 impl App {
     fn new() -> App {
-        App { game: find_game(), nick: "Žaidėjas".into(), tab: Tab::Host, code: String::new(), hosting: None, msg: vec![] }
+        App { game: find_game(), nick: "Player".into(), tab: Tab::Host, code: String::new(), hosting: None, msg: vec![] }
     }
 
     fn host(&mut self) {
         let sock = match UdpSocket::bind(("0.0.0.0", DEFAULT_PORT)) {
             Ok(s) => s,
-            Err(e) => return self.msg.push(format!("Nepavyko atidaryti {DEFAULT_PORT} prievado: {e}")),
+            Err(e) => return self.msg.push(format!("Could not open port {DEFAULT_PORT}: {e}")),
         };
         let key = random_key();
         let players: Players = Arc::default();
@@ -206,23 +206,23 @@ impl App {
         let internet_code = upnp(DEFAULT_PORT).map(|ip| make_code(ip.octets(), DEFAULT_PORT, key));
         let lan_code = lan_ip().map(|ip| make_code(ip.octets(), DEFAULT_PORT, key));
         if internet_code.is_none() {
-            self.msg.push(format!("Maršrutizatorius neatidarė prievado (UPnP). Draugui per internetą atidaryk UDP {DEFAULT_PORT} ranka."));
+            self.msg.push(format!("The router did not open the port (UPnP). For a friend over the internet, open UDP {DEFAULT_PORT} by hand."));
         }
         if let Err(e) = write_session(SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)), key, &self.nick) {
-            self.msg.push(format!("Nepavyko įrašyti sesijos: {e}"));
+            self.msg.push(format!("Could not save the session: {e}"));
         }
         self.hosting = Some(Hosting { internet_code, lan_code, players });
     }
 
     fn join(&mut self) -> bool {
         let Some((ip, port, key)) = parse_code(&self.code) else {
-            self.msg.push("Kodas neteisingas: jame turi būti 16 simbolių.".into());
+            self.msg.push("Invalid code: it must have 16 characters.".into());
             return false;
         };
         match write_session(SocketAddr::from((ip, port)), key, &self.nick) {
             Ok(()) => true,
             Err(e) => {
-                self.msg.push(format!("Nepavyko įrašyti sesijos: {e}"));
+                self.msg.push(format!("Could not save the session: {e}"));
                 false
             }
         }
@@ -239,16 +239,16 @@ impl eframe::App for App {
 
             match self.game.clone() {
                 None => {
-                    ui.colored_label(egui::Color32::RED, "Žaidimas nerastas Steam bibliotekose.");
+                    ui.colored_label(egui::Color32::RED, "Game not found in your Steam libraries.");
                     return;
                 }
                 Some(game) => {
                     if installed(&game) {
-                        ui.label("✔ Modas įdiegtas");
+                        ui.label("✔ Mod installed");
                     } else {
-                        ui.label("Modas dar neįdiegtas.");
+                        ui.label("Mod not installed yet.");
                     }
-                    if ui.button("Įdiegti / atnaujinti modą").clicked() {
+                    if ui.button("Install / update mod").clicked() {
                         match install(&game) {
                             Ok(l) => self.msg.extend(l),
                             Err(e) => self.msg.push(e),
@@ -259,49 +259,49 @@ impl eframe::App for App {
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label("Slapyvardis:");
+                ui.label("Nickname:");
                 ui.add(egui::TextEdit::singleline(&mut self.nick).char_limit(NICK_LEN));
             });
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, Tab::Host, "Kurti žaidimą");
-                ui.selectable_value(&mut self.tab, Tab::Join, "Prisijungti");
+                ui.selectable_value(&mut self.tab, Tab::Host, "Host game");
+                ui.selectable_value(&mut self.tab, Tab::Join, "Join");
             });
             ui.add_space(6.0);
 
             match self.tab {
                 Tab::Host => match &self.hosting {
                     None => {
-                        ui.label("Serveris veiks šiame kompiuteryje. Draugui duosi kodą.");
-                        if ui.button("Kurti žaidimą").clicked() {
+                        ui.label("The server runs on this PC. Give your friend the code.");
+                        if ui.button("Host game").clicked() {
                             self.host();
                         }
                     }
                     Some(h) => {
-                        for (label, code) in [("Kodas draugui per internetą:", &h.internet_code), ("Kodas tame pačiame tinkle:", &h.lan_code)] {
+                        for (label, code) in [("Code for a friend over the internet:", &h.internet_code), ("Code on the same network:", &h.lan_code)] {
                             if let Some(code) = code {
                                 ui.label(label);
                                 ui.horizontal(|ui| {
                                     ui.monospace(code);
-                                    if ui.button("Kopijuoti").clicked() {
+                                    if ui.button("Copy").clicked() {
                                         ctx.copy_text(code.clone());
                                     }
                                 });
                             }
                         }
                         let players = h.players.lock().unwrap().clone();
-                        ui.label(format!("Prisijungę: {}", if players.is_empty() { "dar niekas".into() } else { players.join(", ") }));
-                        if ui.button("Paleisti žaidimą").clicked() {
+                        ui.label(format!("Joined: {}", if players.is_empty() { "nobody yet".into() } else { players.join(", ") }));
+                        if ui.button("Start game").clicked() {
                             start_game();
                         }
-                        ui.small("Nelaikyk šio lango uždaryto, kol žaidžiat: jame veikia serveris.");
+                        ui.small("Keep this window open while you play: the server runs in it.");
                     }
                 },
                 Tab::Join => {
-                    ui.label("Draugo kodas:");
+                    ui.label("Friend's code:");
                     ui.text_edit_singleline(&mut self.code);
-                    if ui.button("Prisijungti ir paleisti žaidimą").clicked() && self.join() {
+                    if ui.button("Join and start game").clicked() && self.join() {
                         start_game();
-                        self.msg.push("Žaidimas paleidžiamas. Įkėlus išsaugojimą prisijungsi automatiškai.".into());
+                        self.msg.push("Starting the game. You join automatically once you load a save.".into());
                     }
                 }
             }

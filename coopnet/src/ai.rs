@@ -1,6 +1,10 @@
 //! AI partner brain: TypeSafe Jev picks the partner's next action from a short situation text (about 0.3 s).
 //! The request runs on its own thread; the script polls the answer. Key: %USERPROFILE%\.config\jev\.env
 //! (TYPESAFE_API_KEY), the same file the jev skills and pilot read. Nothing is sent but the situation text.
+//! With %USERPROFILE%\.config\openai\.env (OPENAI_API_KEY) OpenAI is asked instead (gpt-6-luna, or OPENAI_MODEL
+//! from the same file). Keys are only read from these files on the player's PC, never stored in the mod.
+//! With %USERPROFILE%\.config\openai\.env (OPENAI_API_KEY) OpenAI is asked instead (model gpt-6-luna, or
+//! OPENAI_MODEL from the same file). Keys are only read from these files, never stored in the mod.
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -17,16 +21,49 @@ pub const ACTIONS: [(&str, &str); 5] = [
     ("wait", "stand still where you are, CJ told you to wait or is standing still nearby"),
 ];
 
-fn key() -> Option<String> {
+/// `NAME=value` from %USERPROFILE%\<file>.
+fn env_value(file: &str, name: &str) -> Option<String> {
     let home = std::env::var_os("USERPROFILE")?;
-    let text = std::fs::read_to_string(std::path::PathBuf::from(home).join(r".config\jev\.env")).ok()?;
+    let text = std::fs::read_to_string(std::path::PathBuf::from(home).join(file)).ok()?;
     text.lines()
-        .find_map(|l| l.trim().strip_prefix("TYPESAFE_API_KEY").map(|v| v.trim_start_matches([' ', '=']).trim().trim_matches(['"', '\'']).to_string()))
+        .find_map(|l| l.trim().strip_prefix(name).map(|v| v.trim_start_matches([' ', '=']).trim().trim_matches(['"', '\'']).to_string()))
         .filter(|k| !k.is_empty())
 }
 
+fn ask_openai(situation: &str) -> Option<i32> {
+    let key = env_value(r".config\openai\.env", "OPENAI_API_KEY")?;
+    let model = env_value(r".config\openai\.env", "OPENAI_MODEL").unwrap_or_else(|| "gpt-6-luna".into());
+    let list: Vec<String> = ACTIONS.iter().map(|(n, about)| format!("{n}: {about}")).collect();
+    let body = serde_json::json!({
+        "model": model,
+        "max_completion_tokens": 16,
+        "reasoning_effort": "none",
+        "messages": [
+            { "role": "system", "content": format!(
+                "You control the co-op partner of CJ in GTA San Andreas. Pick the partner's next action. \
+                 Answer with exactly one word from this list:\n{}", list.join("\n")) },
+            { "role": "user", "content": situation },
+        ]
+    });
+    let resp = match ureq::post("https://api.openai.com/v1/chat/completions")
+        .timeout(std::time::Duration::from_secs(4))
+        .set("authorization", &format!("Bearer {key}"))
+        .send_json(body)
+    {
+        Ok(r) => r,
+        Err(e) => {
+            crate::log_line(&format!("ai: OpenAI error {e}"));
+            return None;
+        }
+    };
+    let v: serde_json::Value = resp.into_json().ok()?;
+    let text = v.get("choices")?.get(0)?.get("message")?.get("content")?.as_str()?.to_lowercase();
+    // "enter_car" before "follow"-like words: take the first action name found
+    ACTIONS.iter().position(|(n, _)| text.contains(n)).map(|i| i as i32)
+}
+
 fn ask_jev(situation: &str) -> Option<i32> {
-    let key = key()?;
+    let key = env_value(r".config\jev\.env", "TYPESAFE_API_KEY")?;
     let mut criteria = serde_json::Map::new();
     for (name, about) in ACTIONS {
         criteria.insert(name.into(), serde_json::Value::String(about.into()));
@@ -56,9 +93,11 @@ pub fn ask(situation: String) -> i64 {
         return 0;
     }
     std::thread::spawn(move || {
-        match ask_jev(&situation) {
+        let openai = env_value(r".config\openai\.env", "OPENAI_API_KEY").is_some();
+        let answer = if openai { ask_openai(&situation) } else { ask_jev(&situation) };
+        match answer {
             Some(i) => RESULT.store(i, Ordering::SeqCst),
-            None => crate::log_line("ai: no answer from Jev"),
+            None => crate::log_line(if openai { "ai: no answer from OpenAI" } else { "ai: no answer from Jev" }),
         }
         BUSY.store(false, Ordering::SeqCst);
     });

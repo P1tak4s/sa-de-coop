@@ -1,73 +1,166 @@
 # SA Co-op
 
-Online co-op for **GTA San Andreas – The Definitive Edition** (PC, Steam), in the spirit of Saints Row 2: pick
-**co-op** in the game's own menu, create a session with a name and password, your friend joins with the same
-name and password, and you play in each other's world.
+Online co-op for **GTA San Andreas – The Definitive Edition** (PC, Steam). It works like Saints Row 2: pick
+**co-op** in the game's own menu, create a session with a name and a password, your friend joins with the same name
+and password, and you play the story together, each on your own PC with your own copy of the game.
 
-Status: work in progress. See "What works" below before you expect a full story co-op.
+> **Status: early, work in progress.** Most of it has been tested with a bot friend on one PC; a full play-through
+> with two real players over Steam has not been done yet. Expect bugs. The mod keeps co-op saves apart from yours and
+> backs your saves up (see [Saves](#saves)).
+
+## Contents
+
+- [What works](#what-works)
+- [Requirements](#requirements)
+- [Install (step by step)](#install-step-by-step)
+- [Play with a friend](#play-with-a-friend)
+- [Controls](#controls)
+- [AI partner (playing alone)](#ai-partner-playing-alone)
+- [Saves](#saves)
+- [Troubleshooting](#troubleshooting)
+- [Uninstall](#uninstall)
+- [Build from source](#build-from-source)
+- [Credits and licence](#credits-and-licence)
 
 ## What works
 
-- **co-op** entry in the main and pause menus, with an in-game co-op screen styled like the game's options
-- Sessions through **Steam lobbies** (name + password, P2P through Steam's relay: no port forwarding, no IPs shown);
-  a direct IP mode with a join code is in the launcher
-- Your friend in your world: walking, running, driving (with reverse), same weapon, shots, name over the head,
-  map blip, same interior only
-- **G** to ride as a passenger in your friend's car
-- **Down, not dead**: below 40 health you fall instead of dying (also in a car). A red banner at the top counts
-  down 30 s; your friend walks up and **holds E** for 3 s to get you up. Nobody in time: the normal death
-- **AI partner** (switch in the co-op screen) for when you play alone: a Grove Street member who follows you, sits
-  in the back seat, shoots rival gangs, revives you, and you revive him the same way. **H** next to a car: he drives
-  you to your map waypoint. His choices come from [TypeSafe Jev](https://typesafe.ai) (needs your own key in
-  `%USERPROFILE%\.config\jev\.env`)
-- Shared clock, weather (from the first player), wanted level (the higher one spreads)
-- Cutscenes started in one game play in the other; mission start/end is announced
-- Your last car keeps its place and a map blip, also after save/load
-- Cars and people the mod created are cleaned up when its scripts reload (no "ghost" cars)
-- Optional graphics settings (sharper image, longer view distance, better shadows, no motion blur)
+- A **co-op** entry in the main menu and the pause menu, opening a co-op screen styled like the game's options
+- Sessions through **Steam lobbies**: a name and a password, no port forwarding, no IP addresses
+  (a direct IP mode with a join code is also in the installer)
+- Your friend in your world: walking, running, driving, the same weapon, a name over their head and a map blip
+- Ride as a passenger in your friend's car
+- **Down, not dead**: below 40 health you fall instead of dying. A red banner at the top counts down 30 seconds;
+  your friend walks up and holds **E** for 3 seconds to get you up. Nobody in time: the normal death
+- Shared clock, weather and wanted level; cutscenes and mission start/end are shared
+- An optional **AI partner** for when you play alone
+- Your last car is remembered (map blip), also after save/load
+- Optional graphics settings: sharper image, longer view distance, better shadows, no motion blur
 
-Not yet: shared mission entities (enemies, targets), shared money, your friend wearing CJ's clothes.
+Not yet, or not tested: full mission sync for two real players (enemies, shared money), your friend wearing CJ's
+clothes, the train mission special case.
 
 ## Requirements
 
-- A legally owned copy of GTA San Andreas – The Definitive Edition on Steam, build **1.0.113.49697469**
-  (memory addresses are for this build; another build needs new ones)
-- Windows 10/11, each player on their own PC with their own copy
+- A **legally owned** copy of GTA San Andreas – The Definitive Edition on **Steam**, game build
+  **1.0.113.49697469**. The mod reads game memory at fixed addresses for this build; other builds will not work.
+- Windows 10 or 11 (64-bit)
+- For co-op: your friend needs their own PC and their own Steam copy of the game. Pirated copies are not supported.
 
-## Install
+## Install (step by step)
 
-1. Download the release and unpack it anywhere.
-2. Run `sa-coop.exe` and press **Įdiegti / atnaujinti modą** (install / update). It finds the game in your Steam
-   libraries and installs:
-   - CLEO Redux and Ultimate ASI Loader (their licences are included)
-   - `coopnet64.asi` and the game scripts
-   - the **co-op** menu entry, built on your PC from your own game files (nothing from Rockstar is shipped)
-   - the menu fonts, taken from your own game files
-   - `Engine.ini` graphics settings, only if you have none
-3. Start the game from Steam. Press **co-op** in the menu (or **F9** anywhere).
+1. Close the game.
+2. Open [**Releases**](https://github.com/P1tak4s/sa-de-coop/releases) and download `SA-Coop-<version>-windows-x64.zip`.
+3. Unpack the zip anywhere, for example to `Downloads\SA-Coop`. Keep the folders together: `sa-coop.exe` needs the
+   `game` and `extra` folders next to it.
+4. Run **`sa-coop.exe`**. Windows SmartScreen may warn about an unknown app: click **More info → Run anyway**
+   (the exe is not code-signed; you can build it yourself, see [Build from source](#build-from-source)).
+5. The installer finds the game by itself in all your Steam libraries. Click **Install / update mod**. It:
+   - copies the mod loader (Ultimate ASI Loader, CLEO Redux), `coopnet64.asi` and the scripts into
+     `...\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64`
+   - builds the **co-op** menu entry on your PC from your own game files (nothing from Rockstar is in the download)
+   - copies the menu fonts from your own game files
+   - adds the graphics settings (`Engine.ini`), only if you have none
+6. Start the game from Steam as usual. You should see **co-op** in the main menu.
 
-To remove: delete `version.dll`, `cleo_redux64.asi`, `coopnet64.asi` and the `CLEO` folder from
-`Gameface\Binaries\Win64`, `Gameface\Content\Paks\~mods\coop_P.pak`, and the `Engine.ini` the installer created.
+Your friend does the same on their PC.
 
-## How it is built
+## Play with a friend
+
+Both of you must be logged in to Steam.
+
+1. **Host** (the one whose story you play): in the main menu pick **co-op**, open the **Create** tab, type a session
+   name and a password, and press **Create session**. Then load a save or start a new game.
+2. **Friend**: in the main menu pick **co-op**, open the **Join** tab, type the **same** name and password, press
+   **Join**, then load a save. You are placed in the host's world.
+3. In game you can open the co-op screen any time: **Esc → co-op**, or **F9**.
+
+The host's story is the one you both play. The friend's own story is not touched (see [Saves](#saves)).
+
+## Controls
+
+| Key | What it does |
+| --- | --- |
+| **F9** or **Esc → co-op** | open / close the co-op screen |
+| **G** (next to your friend's car) | sit next to your friend as a passenger |
+| **F** / **Enter** | get out of the car |
+| **E** (hold 3 s next to a downed friend) | revive them |
+| **H** (AI partner, next to a car) | the partner drives you to your map waypoint; **H** again to stop |
+
+## AI partner (playing alone)
+
+Turn it on in the co-op screen. A Grove Street member joins you: he follows you, gets into the back seat of your car,
+shoots rival gangs, revives you when you are down, and you can revive him the same way (hold **E**). Next to a car,
+**H** makes him drive you to the waypoint you set on the map.
+
+His decisions come from [TypeSafe Jev](https://typesafe.ai). You need your own key, in this text file:
+
+```
+%USERPROFILE%\.config\jev\.env
+```
+
+with one line: `TYPESAFE_API_KEY=your-key`.
+
+Or use OpenAI instead: put `OPENAI_API_KEY=your-key` in `%USERPROFILE%\.config\openai\.env` (optionally a second
+line `OPENAI_MODEL=...`, default `gpt-6-luna`). When that file exists, OpenAI is used. Keys are read only from these
+files on your PC; only a one-line description of the situation is sent.
+
+Without any key he still follows you and shoots enemies close to you.
+
+## Saves
+
+The co-op screen has a **Mine / Co-op** switch. Co-op games are saved separately, so a co-op session never
+overwrites your own story. Before switching, the mod copies your saves to `%LOCALAPPDATA%\sa-de-coop\saves-backup`.
+
+## Troubleshooting
+
+- **No co-op entry in the menu**: run `sa-coop.exe` again and press **Install / update mod**. **F9** still opens the
+  co-op screen in game.
+- **The game crashes at start**: check that your game build is 1.0.113.49697469 (Steam may have updated the game).
+  The mod's log is `%LOCALAPPDATA%\sa-de-coop\coopnet.log`; please open an issue with it.
+- **Crash at start with DirectX errors**: install the
+  [DirectX End-User Runtimes (June 2010)](https://www.microsoft.com/en-us/download/details.aspx?id=8109).
+- **Friend cannot join**: both must type exactly the same session name and password, and both must be online in Steam.
+- **Camera feels slow up and down**: raise **Mouse Sensitivity Y** in the game's control settings.
+- Script messages are logged in `Gameface\Binaries\Win64\cleo_redux.log`.
+
+## Uninstall
+
+Delete these from `Gameface\Binaries\Win64`: `version.dll`, `cleo_redux64.asi`, `coopnet64.asi` and the `CLEO`
+folder. Delete `Gameface\Content\Paks\~mods\coop_P.pak`. If the installer created your `Engine.ini`
+(`Documents\Rockstar Games\GTA San Andreas Definitive Edition\Config\WindowsNoEditor\Engine.ini`), delete it too.
+Your saves stay where they are.
+
+## Build from source
 
 | Part | What it does |
 | --- | --- |
 | `proto/` | wire format (80-byte player state, events, join code) |
-| `relay/` | UDP relay server for IP mode, UPnP |
-| `coopnet/` | `coopnet64.asi`: network (Steam lobby + P2P or UDP), the in-game co-op screen (hudhook / Dear ImGui), the menu hook (UObject::ProcessEvent) |
-| `game/CLEO/` | CLEO Redux scripts: friend sync, passenger, revive, names, world sync, your car |
+| `relay/` | UDP relay server for the IP mode, UPnP |
+| `coopnet/` | `coopnet64.asi`: networking (Steam lobby + P2P, or UDP), the in-game co-op screen (hudhook / Dear ImGui), the menu hook, AI partner calls |
+| `game/CLEO/` | CLEO Redux scripts: friend sync, passenger, revive, names, world sync, your car, AI partner |
 | `launcher/` | `sa-coop.exe`: installer and IP-mode host/join |
 | `menu-mod/tool/` | MenuPatch (UAssetAPI): adds the co-op entry to the game's menu templates |
-| `tools/` | `dll_test.py` (loopback test without the game), `botas.py` (a test friend) |
+| `tools/` | `dll_test.py` (loopback test without the game), `botas.py` (a test friend bot) |
 
-Build: Rust stable (MSVC), `cargo build --release`; MenuPatch: .NET 8, `dotnet publish -r win-x64 --self-contained`.
+Needs Rust stable (MSVC toolchain), CMake and the .NET 8 SDK.
 
-## Credits
+```
+cargo build --release
+dotnet publish menu-mod/tool -c Release -r win-x64 --self-contained
+```
+
+`target/release/coopnet64.dll` is installed as `coopnet64.asi`. Release zip layout: `sa-coop.exe`; `game/` (the
+files from `game/` plus `coopnet64.asi`); `extra/` (`MenuPatch.exe`, `repak.exe`, `Engine.ini` from `game-config/`,
+`THIRD_PARTY.txt`).
+
+## Credits and licence
 
 [CLEO Redux](https://re.cleo.li) by Seemann, [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
 by ThirteenAG, [hudhook](https://github.com/veeenu/hudhook), [repak](https://github.com/trumank/repak),
 [UAssetAPI](https://github.com/atenfyr/UAssetAPI). Ideas from [SA:COOP](https://github.com/Karimov-Akbar/sa-coop)
-for the classic game.
+for the classic game. Third-party files keep their own licences (included).
 
-Not affiliated with Rockstar Games or Take-Two Interactive. Licence: MIT.
+Code in this repository: [MIT](LICENSE).
+
+Not affiliated with or endorsed by Rockstar Games or Take-Two Interactive. Grand Theft Auto and San Andreas are their
+trademarks. This mod contains no game files; you need your own copy of the game.

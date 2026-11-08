@@ -24,24 +24,24 @@ center = None; t0 = time.time(); slot = None
 while True:
     try:
         d, _ = s.recvfrom(512)
-        if d[:4] == MAGIC and d[4] == 2: slot = d[5]; print("prisijungta, vieta", slot)
-        if d[:4] == MAGIC and d[4] == 3: print("serveris nepriėmė"); break
+        if d[:4] == MAGIC and d[4] == 2: slot = d[5]; print("joined, slot", slot)
+        if d[:4] == MAGIC and d[4] == 3: print("server refused"); break
         if d[:4] == MAGIC and d[4] == 4:
-            if center is None: center = struct.unpack_from("<3f", d, 6); print("tavo vieta", center)
+            if center is None: center = struct.unpack_from("<3f", d, 6); print("your position", center)
             if rider_since is None and struct.unpack_from("<i", d, 6 + 48)[0] == 2:
-                rider_since = time.time(); print("tu sedi, vaziuojam")
+                rider_since = time.time(); print("you are in, driving")
             if struct.unpack_from("<i", d, 6 + 56)[0] < 0:  # you are down
                 you_down_since = you_down_since or time.time()
                 if time.time() - you_down_since > 3:
-                    s.sendto(MAGIC + bytes([6, d[5]]), srv); print("atgaivinu tave"); you_down_since = None
+                    s.sendto(MAGIC + bytes([6, d[5]]), srv); print("reviving you"); you_down_since = None
             else:
                 you_down_since = None
         if d[:4] == MAGIC and d[4] == 8 and len(d) > 7:
-            print("ivykis", d[6], d[7:].split(bytes([0]))[0].decode(errors="replace"))
+            print("event", d[6], d[7:].split(bytes([0]))[0].decode(errors="replace"))
         if d[:4] == MAGIC and d[4] == 9 and len(d) > 7:
-            print("misijos objektai:", d[6])
+            print("mission entities:", d[6])
         if d[:4] == MAGIC and d[4] == 6 and len(d) >= 7 and d[6] == slot:
-            print("tu mane atgaivinai"); down = False
+            print("you revived me"); down = False
     except socket.timeout:
         pass
     if slot is None:

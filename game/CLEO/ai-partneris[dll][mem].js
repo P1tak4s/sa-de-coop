@@ -1,7 +1,7 @@
 /// <reference path=".config/sa.d.ts" />
 // AI partner: a Grove Street gang member that follows you, rides with you, drives (H) and fights,
 // with TypeSafe Jev choosing what it does every few seconds from a short description of the situation.
-// Switched on in the co-op menu ("AI partneris"). Talks to coopnet64.asi (Jev runs there, off the game thread).
+// Switched on in the co-op menu ("AI partner"). Talks to coopnet64.asi (Jev runs there, off the game thread).
 
 let lib;
 for (const path of ["coopnet64.asi", "../coopnet64.asi"]) { lib = DynamicLibrary.Load(path); if (lib) break; }
@@ -24,7 +24,7 @@ const buf = Memory.Allocate(512);
 const MODEL = 106;          // a Grove Street member
 const WEAPON = 30, AMMO = 600; // AK-47
 const ACTIONS = ["follow", "enter_car", "attack", "take_cover", "wait"];
-const SAY = { follow: "AI: seku", enter_car: "AI: sedu i masina", attack: "AI: puolu", take_cover: "AI: slepiuosi", wait: "AI: laukiu" };
+const SAY = { follow: "AI: following", enter_car: "AI: getting in", attack: "AI: attacking", take_cover: "AI: taking cover", wait: "AI: waiting" };
 const CLEANUP = 0x53DB410; // mission cleanup list (Steam build 1.0.113.49697469): peds of the current mission
 
 const player = new Player(0);
@@ -183,12 +183,12 @@ function chauffeurKey(me) {
       if (ped.isInAnyCar()) ped.warpFromCarToCoord(c.x - 2.5, c.y, c.z);
       chauffeur = null;
       action = "follow";
-      showTextBox("AI: sustoju");
+      showTextBox("AI: stopping");
       return;
     }
     const p = me.getCoordinates();
     const car = me.isInAnyCar() ? me.storeCarIsInNoSave() : World.GetRandomCarInSphereNoSave(p.x, p.y, p.z, 8, -1);
-    if (!car || +car <= 0) { showTextBox("Prieik prie masinos (iki 8 m) ir spausk H"); return; }
+    if (!car || +car <= 0) { showTextBox("Walk up to a car (within 8 m) and press H"); return; }
     if (me.isInAnyCar()) me.warpFromCarToCoord(p.x + 2, p.y, p.z);
     if (ped.isInAnyCar()) { const q = ped.getCoordinates(); ped.warpFromCarToCoord(q.x, q.y, q.z); }
     ped.warpIntoCar(car);
@@ -199,12 +199,12 @@ function chauffeurKey(me) {
     car.gotoCoordinates(dest.x, dest.y, dest.z);
     chauffeur = car;
     action = "drive";
-    showTextBox(dest === GROVE ? "AI: vezu i Grove Street. H - sustoti" : "AI: vezu i tavo taska. H - sustoti");
+    showTextBox(dest === GROVE ? "AI: driving to Grove Street. H - stop" : "AI: driving to your waypoint. H - stop");
   } catch (e) { log(`[ai] H: ${e}`); }
 }
 
 // name tag over the partner's head (same drawing as the co-op script: the game's text, by key)
-try { FxtStore.insert("COOPAI", "AI partneris"); } catch (e) {}
+try { FxtStore.insert("COOPAI", "AI partner"); } catch (e) {}
 function toScreen(p) {
   const cam = Camera.GetActiveCoordinates(), at = Camera.GetActivePointAt();
   let fx = at.x - cam.x, fy = at.y - cam.y, fz = at.z - cam.z;
@@ -238,9 +238,9 @@ log("[ai] ready");
 // Nobody in time: the normal death (CJ: wasted / mission failed; partner: back after 10 s).
 const DOWN_AT = 40, BLEED_OUT = 30000, REVIVE_MS = 3000, KEY_E = 69;
 try {
-  FxtStore.insert("COOPAD1", "TU SUZEISTAS! AI partneris ateina: ~1~ s");
-  FxtStore.insert("COOPAD2", "YOUR HOMIE IS DOWN! Atgaivink: ~1~ s");
-  FxtStore.insert("COOPAD3", "Laikyk E, kad atgaivintum: ~1~ %");
+  FxtStore.insert("COOPAD1", "YOU ARE DOWN! AI partner is coming: ~1~ s");
+  FxtStore.insert("COOPAD2", "YOUR HOMIE IS DOWN! Revive: ~1~ s");
+  FxtStore.insert("COOPAD3", "Hold E to revive: ~1~ %");
 } catch (e) {}
 function banner(key, num, y) {
   try {
@@ -290,7 +290,7 @@ function handleDown(me) {
   if (!reviveStart) { reviveStart = now; try { Task.StandStill(ped, REVIVE_MS); } catch (e) {} }
   if (now - reviveStart >= REVIVE_MS) {
     cjUp(me, 60);
-    try { showTextBox("AI partneris tave atgaivino"); } catch (e) {}
+    try { showTextBox("AI partner revived you"); } catch (e) {}
     log("[ai] CJ revived");
   }
   return true;
@@ -321,7 +321,7 @@ function handlePartnerDown(me) {
       if (pct >= 100) {
         aiDown = false; holdStart = 0;
         standUp(ped, 120);
-        try { showTextBox("Atgaivinai AI partneri"); } catch (e) {}
+        try { showTextBox("You revived the AI partner"); } catch (e) {}
         log("[ai] partner revived");
       }
     } else { holdStart = 0; banner("COOPAD3", 0, 60); }
@@ -334,10 +334,10 @@ while (true) {
   if (!player.isPlaying()) continue;
   drawTag();
   const me = player.getChar();
-  if (!aiEnabled()) { if (ped) { despawn(); try { showTextBox("AI partneris isjungtas"); } catch (e) {} } continue; }
+  if (!aiEnabled()) { if (ped) { despawn(); try { showTextBox("AI partner off"); } catch (e) {} } continue; }
 
   if (ped && (!Char.DoesExist(ped) || ped.getHealth() <= 0)) {
-    if (!deadAt) { deadAt = Date.now(); try { showTextBox("AI partneris zuvo. Grizta po 10 s"); } catch (e) {} }
+    if (!deadAt) { deadAt = Date.now(); try { showTextBox("AI partner died. Back in 10 s"); } catch (e) {} }
     if (Date.now() - deadAt < 10000) continue;
     despawn(); deadAt = 0;
   }
@@ -351,7 +351,7 @@ while (true) {
     if (!Car.DoesExist(chauffeur) || !me.isInAnyCar()) { chauffeur = null; action = "follow"; continue; }
     try {
       if (dest && d2(chauffeur.getCoordinates(), dest) < 25 * 25) {
-        chauffeur.setCruiseSpeed(0); chauffeur.setMission(11); dest = null; showTextBox("AI: atvykome");
+        chauffeur.setCruiseSpeed(0); chauffeur.setMission(11); dest = null; showTextBox("AI: we are here");
       }
     } catch (e) {}
     continue;

@@ -53,20 +53,20 @@ fn swap(store_away: &Path, bring_in: &Path, backup: &Path, profile: &Path) -> st
 
 /// Switch to "coop" or "solo". Returns a line for the player.
 pub fn switch_to(target: &str) -> Result<String, String> {
-    let data = data_dir().ok_or("nėra LOCALAPPDATA")?;
-    let profile = profile_dir().ok_or("nerastas žaidimo išsaugojimų aplankas")?;
+    let data = data_dir().ok_or("LOCALAPPDATA is not set")?;
+    let profile = profile_dir().ok_or("game save folder not found")?;
     if mode() == target {
         return Ok(String::new());
     }
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let backup = data.join("saves-backup").join(stamp.to_string());
     let (away, inn) = if target == "coop" { (data.join("saves-solo"), data.join("saves-coop")) } else { (data.join("saves-coop"), data.join("saves-solo")) };
-    let n = swap(&away, &inn, &backup, &profile).map_err(|e| format!("nepavyko perkelti išsaugojimų: {e}"))?;
+    let n = swap(&away, &inn, &backup, &profile).map_err(|e| format!("could not move the saves: {e}"))?;
     std::fs::write(data.join("saves-mode.txt"), target).map_err(|e| e.to_string())?;
     crate::log_line(&format!("saves: now {target}, {n} brought in, backup {}", backup.display()));
     Ok(if target == "coop" {
-        if n == 0 { "Co-op išsaugojimų dar nėra: pradėk New Game ir išsaugok.".into() } else { format!("Įkelti co-op išsaugojimai ({n}).") }
+        if n == 0 { "No co-op saves yet: start a New Game and save.".into() } else { format!("Co-op saves loaded ({n}).") }
     } else {
-        format!("Grąžinti tavo išsaugojimai ({n}).")
+        format!("Your own saves are back ({n}).")
     })
 }

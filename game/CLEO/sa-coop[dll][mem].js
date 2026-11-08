@@ -60,9 +60,9 @@ const REVIVE_HOLD = 3000;           // hold E this long next to a downed friend
 const DOWN_ANIM = ["KO_skid_back", "PED"];
 // top-centre banner with a seconds countdown (~1~ is the number)
 try {
-  FxtStore.insert("COOPDN1", "TU SUZEISTAS! Draugas gali atgaivinti: ~1~ s");
-  FxtStore.insert("COOPDN2", "YOUR HOMIE IS DOWN! Atgaivink: ~1~ s");
-  FxtStore.insert("COOPDN3", "Laikyk E, kad atgaivintum: ~1~ %");
+  FxtStore.insert("COOPDN1", "YOU ARE DOWN! A friend can revive you: ~1~ s");
+  FxtStore.insert("COOPDN2", "YOUR HOMIE IS DOWN! Revive: ~1~ s");
+  FxtStore.insert("COOPDN3", "Hold E to revive: ~1~ %");
 } catch (e) {}
 function banner(key, num, y) {
   try {
@@ -219,7 +219,7 @@ function goDown(me, now) {
   me.setProofs(true, true, true, true, true);
   player.setControl(false);
   try { Task.PlayAnim(me, DOWN_ANIM[0], DOWN_ANIM[1], 4.0, false, false, false, true, -1); } catch (e) {}
-  say("SA Co-op: tu suzeistas. Draugas gali tave atgaivinti (30 s)");
+  say("SA Co-op: you are down. A friend can revive you (30 s)");
 }
 
 function getUp(me, health) {
@@ -236,7 +236,7 @@ function handleOwnHealth(me, now) {
     return;
   }
   banner("COOPDN1", (BLEED_OUT - (now - downedAt)) / 1000);
-  if (api.coop_take_revived()) { getUp(me, 60); say("SA Co-op: draugas tave atgaivino"); return; }
+  if (api.coop_take_revived()) { getUp(me, 60); say("SA Co-op: your friend revived you"); return; }
   if (now - downedAt > BLEED_OUT || !anyFriend()) { getUp(me, 0); } // nobody came: the game's own death
 }
 
@@ -412,7 +412,7 @@ function downRemote(r, s, slot, me) {
     r.down = true; r.hinted = false; r.downAt = Date.now(); r.holdStart = 0;
     r.ped.setCoordinatesNoOffset(s.x, s.y, s.z);
     try { Task.PlayAnim(r.ped, DOWN_ANIM[0], DOWN_ANIM[1], 4.0, false, false, false, true, -1); } catch (e) {}
-    say("SA Co-op: draugas suzeistas! Prieik ir spausk E");
+    say("SA Co-op: your friend is down! Go over and hold E");
   }
   const left = (BLEED_OUT - (Date.now() - (r.downAt || Date.now()))) / 1000;
   banner("COOPDN2", left);
@@ -575,7 +575,7 @@ function hearWorld(me) {
     else if (kind === EV.CUTSCENE) playCutscene(text, me);
     else if (kind === 4 || kind === 5) onMissionEvent(kind, text);
     else if (kind === 6 || kind === 7) onStoryEvent(kind, text);
-    else if (kind === EV.MISSION) say(text ? `SA Co-op: draugas pradejo misija (${text})` : "SA Co-op: draugo misija baigesi");
+    else if (kind === EV.MISSION) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
 }
 
@@ -717,7 +717,7 @@ function onMissionEvent(kind, text) {
     const earned = parseInt(text, 10);
     if (earned > 0 && earned < 10000000) {
       Memory.WriteI32(MRVA.money, Memory.ReadI32(MRVA.money, false, true) + earned, false, true);
-      say(`SA Co-op: misija baigta, gavai $${earned}`);
+      say(`SA Co-op: mission passed, you got $${earned}`);
     }
   }
 }
@@ -749,7 +749,7 @@ function lockGuestStory() {
   try { inside = player.getChar().getAreaVisible() !== 0; } catch (e) {}
   if (isGuest() && !inside) {
     if (Memory.ReadI32(a, false, true) !== 1) Memory.WriteI32(a, 1, false, true);
-    if (!guestLocked) { guestLocked = true; say("SA Co-op: zaidi draugo istorija. Issaugoti gali savo namuose"); }
+    if (!guestLocked) { guestLocked = true; say("SA Co-op: you play your friend's story. You can save in your own safehouses"); }
   } else if (guestLocked) {
     guestLocked = false;
     Memory.WriteI32(a, 0, false, true);
@@ -833,19 +833,19 @@ while (true) {
   if (!started) {
     started = true;
     // a launcher session (IP mode) if there is one; otherwise the F9 window decides
-    if (!api.coop_start() && api.coop_status() !== 2) say("SA Co-op: F9 - co-op langas (pavadinimas ir slaptazodis)");
+    if (!api.coop_start() && api.coop_status() !== 2) say("SA Co-op: F9 - co-op window (name and password)");
   }
   if (now - lastCodeCheck > 1000) {
     lastCodeCheck = now;
     const code = readCode();
-    if (code && code !== lastCode) { lastCode = code; say(`SA Co-op kodas (nukopijuotas): ${code}`); }
+    if (code && code !== lastCode) { lastCode = code; say(`SA Co-op code (copied): ${code}`); }
   }
 
   const status = api.coop_status();
   if (status !== announced) {
     announced = status;
-    if (status === 2) say("SA Co-op: prisijungta");
-    if (status === 3) say("SA Co-op: serveris neprieme (blogas kodas arba nera vietu)");
+    if (status === 2) say("SA Co-op: connected");
+    if (status === 3) say("SA Co-op: server refused (wrong code or no free slots)");
   }
   if (status !== 2) continue;
 

@@ -10,7 +10,7 @@ for _ in range(50):
     n = dll.coop_code(buf, 32)
     if n: break
     time.sleep(0.1)
-code = buf.raw[:n].decode(); print("kodas", code)
+code = buf.raw[:n].decode(); print("code", code)
 A = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; v = 0
 for c in code.replace("-", ""): v = v << 5 | A.index(c)
 srv = ("127.0.0.1", (v >> 32) & 0xFFFF); key = v & 0xFFFFFFFF
@@ -35,7 +35,7 @@ out = ctypes.create_string_buffer(80)
 ok = dll.coop_get(bot_slot if bot_slot is not None else 1, out)
 peer = struct.unpack_from("<3f", out.raw) if ok else None
 nb = ctypes.create_string_buffer(16); nl = dll.coop_name(bot_slot if bot_slot is not None else 1, nb, 16)
-print("statusas", dll.coop_status(), "mano vieta", dll.coop_slot(), "roboto vieta", bot_slot)
-print("robotas gavo DLL bukle:", got_dll_state)
-print("DLL gavo roboto bukle:", peer, "vardas:", nb.raw[:nl].decode())
+print("status", dll.coop_status(), "my slot", dll.coop_slot(), "bot slot", bot_slot)
+print("bot got DLL state:", got_dll_state)
+print("DLL got bot state:", peer, "name:", nb.raw[:nl].decode())
 sys.exit(0 if (got_dll_state and peer and nb.raw[:nl] == b"Botas") else 1)

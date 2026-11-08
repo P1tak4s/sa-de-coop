@@ -11,7 +11,7 @@ pub static OPEN: AtomicBool = AtomicBool::new(false);
 pub static SKIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 /// The last message about save sets, shown in the status row.
 pub static SAVE_NOTE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-pub const SKIN_NAMES: [&str; 8] = ["Grove Street narys", "Sweet", "Ryder", "Big Smoke", "Cesar", "Kendl", "Woozie", "The Truth"];
+pub const SKIN_NAMES: [&str; 8] = ["Grove Street member", "Sweet", "Ryder", "Big Smoke", "Cesar", "Kendl", "Woozie", "The Truth"];
 
 pub fn toggle() {
     let was = OPEN.fetch_xor(true, Ordering::SeqCst);
@@ -29,13 +29,13 @@ pub struct CoopMenu {
 
 fn status_text() -> &'static str {
     match crate::status_code() {
-        1 => "Jungiamasi per Steam...",
-        2 => "Prisijungta! Įkelk išsaugojimą arba grįžk į žaidimą.",
-        3 => "Serveris nepriėmė.",
-        5 => "Tokios sesijos nėra. Patikrink pavadinimą.",
-        6 => "Neteisingas slaptažodis.",
-        7 => "Steam nepasiekiamas.",
-        8 => "Sesija pilna (4 žaidėjai).",
+        1 => "Connecting through Steam...",
+        2 => "Connected! Load a save or go back to the game.",
+        3 => "The server refused.",
+        5 => "No such session. Check the name.",
+        6 => "Wrong password.",
+        7 => "Steam unavailable.",
+        8 => "Session full (4 players).",
         _ => "",
     }
 }
@@ -133,7 +133,7 @@ impl ImguiRenderLoop for CoopMenu {
                 // ---- tabs (Beckett, like "controls / gameplay / graphics")
                 let tab_w = w / 2.0;
                 let tab_h = ROW_H * 1.15;
-                for (i, label) in ["sukurti", "prisijungti"].iter().enumerate() {
+                for (i, label) in ["Create", "Join"].iter().enumerate() {
                     let on = (i == 1) == join_tab;
                     let p0 = [origin[0] + tab_w * i as f32, origin[1]];
                     let p1 = [p0[0] + tab_w - 4.0, p0[1] + tab_h];
@@ -162,20 +162,20 @@ impl ImguiRenderLoop for CoopMenu {
                     hover && ui.is_mouse_clicked(imgui::MouseButton::Left)
                 };
 
-                row_bg(y, 0, "Sesijos pavadinimas");
+                row_bg(y, 0, "Session name");
                 ui.set_cursor_screen_pos([field_x, y + (ROW_H - ui.frame_height()) / 2.0]);
                 ui.set_next_item_width(field_w);
                 ui.input_text("##name", name).build();
                 y += ROW_H;
 
-                row_bg(y, 1, "Slaptažodis");
+                row_bg(y, 1, "Password");
                 ui.set_cursor_screen_pos([field_x, y + (ROW_H - ui.frame_height()) / 2.0]);
                 ui.set_next_item_width(field_w);
                 ui.input_text("##pw", pw).password(true).build();
                 y += ROW_H;
 
                 let skin = SKIN.load(Ordering::SeqCst) as usize % SKIN_NAMES.len();
-                if row_bg(y, 2, "Išvaizda") {
+                if row_bg(y, 2, "Look") {
                     SKIN.store(((skin + 1) % SKIN_NAMES.len()) as u8, Ordering::SeqCst);
                 }
                 let label = format!("<  {}  >", SKIN_NAMES[skin]);
@@ -185,19 +185,19 @@ impl ImguiRenderLoop for CoopMenu {
 
                 // own saves or a separate co-op set (switch before loading a game)
                 let coop_saves = crate::saves::mode() == "coop";
-                if row_bg(y, 3, "Išsaugojimai") {
+                if row_bg(y, 3, "Saves") {
                     let note = match crate::saves::switch_to(if coop_saves { "solo" } else { "coop" }) {
                         Ok(n) => n,
                         Err(e) => e,
                     };
                     *SAVE_NOTE.lock().unwrap() = note;
                 }
-                let label = if coop_saves { "<  Co-op  >" } else { "<  Mano  >" };
+                let label = if coop_saves { "<  Co-op  >" } else { "<  Mine  >" };
                 let ts = ui.calc_text_size(label);
                 dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], label);
                 y += ROW_H;
 
-                let go_label = if join_tab { "Prisijungti" } else { "Sukurti sesiją" };
+                let go_label = if join_tab { "Join" } else { "Create session" };
                 if row_bg(y, 4, go_label) {
                     go = true;
                 }
@@ -217,15 +217,15 @@ impl ImguiRenderLoop for CoopMenu {
 
                 if !join_tab {
                     let on = crate::ai::ENABLED.load(Ordering::SeqCst);
-                    if row_bg(y, 6, "AI partneris (Jev)") {
+                    if row_bg(y, 6, "AI partner (Jev)") {
                         crate::ai::ENABLED.store(!on, Ordering::SeqCst);
                     }
-                    let label = if on { "<  Įjungtas  >" } else { "<  Išjungtas  >" };
+                    let label = if on { "<  On  >" } else { "<  Off  >" };
                     let ts = ui.calc_text_size(label);
                     dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], label);
                     y += ROW_H;
                 }
-                if !join_tab && row_bg(y, 7, "Bandymas su robotu (be draugo)") {
+                if !join_tab && row_bg(y, 7, "Test with a bot (no friend)") {
                     // leave any session first, then host over UDP so the test bot can join
                     crate::leave_session();
                     if crate::coop_host() == 1 {
@@ -235,7 +235,7 @@ impl ImguiRenderLoop for CoopMenu {
                 if !join_tab {
                     y += ROW_H;
                 }
-                if row_bg(y, 8, "Atgal") {
+                if row_bg(y, 8, "Back") {
                     close = true;
                 }
             });

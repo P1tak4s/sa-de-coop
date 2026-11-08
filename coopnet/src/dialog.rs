@@ -1,5 +1,5 @@
 //! The co-op window: F9 anywhere in the game (title screen included) opens a small window over it with a session
-//! name, a password, "Sukurti" (host) and "Prisijungti" (join). Plain Win32 on its own thread, so the game never
+//! name, a password, "Create" (host) and "Join" (join). Plain Win32 on its own thread, so the game never
 //! waits for it. Loaded at game start because the ASI loader loads coopnet64.asi.
 
 
@@ -59,14 +59,14 @@ unsafe fn text_of(hwnd: HWND, id: i32) -> String {
 
 fn status_text() -> &'static str {
     match crate::status_code() {
-        1 => "Jungiamasi per Steam...",
-        2 => "Prisijungta. Įkelk išsaugojimą arba grįžk į žaidimą.",
-        3 => "Serveris nepriėmė.",
-        5 => "Tokios sesijos nėra. Patikrink pavadinimą.",
-        6 => "Neteisingas slaptažodis.",
-        7 => "Steam nepasiekiamas. Ar Steam įjungtas?",
-        8 => "Sesija pilna (4 žaidėjai).",
-        _ => "Įvesk sesijos pavadinimą ir slaptažodį.",
+        1 => "Connecting through Steam...",
+        2 => "Connected. Load a save or go back to the game.",
+        3 => "The server refused.",
+        5 => "No such session. Check the name.",
+        6 => "Wrong password.",
+        7 => "Steam unavailable. Is Steam running?",
+        8 => "Session full (4 players).",
+        _ => "Enter a session name and password.",
     }
 }
 
@@ -78,7 +78,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let name = text_of(hwnd, ID_NAME).trim().to_string();
                 let pw = text_of(hwnd, ID_PW);
                 if name.is_empty() {
-                    SetWindowTextW(GetDlgItem(hwnd, ID_STATUS), w("Pirma įvesk pavadinimą.").as_ptr());
+                    SetWindowTextW(GetDlgItem(hwnd, ID_STATUS), w("Enter a name first.").as_ptr());
                 } else {
                     crate::start_steam_session(id == ID_HOST, name, pw);
                 }
@@ -152,12 +152,12 @@ unsafe fn run_window() {
         );
         SendMessageW(c, WM_SETFONT, font as usize, 1);
     };
-    add("STATIC", "Sesijos pavadinimas:", 0, 16, 16, 340, 18, 0);
+    add("STATIC", "Session name:", 0, 16, 16, 340, 18, 0);
     add("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL as u32, 16, 36, 340, 24, ID_NAME);
-    add("STATIC", "Slaptažodis:", 0, 16, 70, 340, 18, 0);
+    add("STATIC", "Password:", 0, 16, 70, 340, 18, 0);
     add("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32, 16, 90, 340, 24, ID_PW);
-    add("BUTTON", "Sukurti", WS_TABSTOP | BS_DEFPUSHBUTTON as u32, 16, 128, 165, 30, ID_HOST);
-    add("BUTTON", "Prisijungti", WS_TABSTOP | BS_PUSHBUTTON as u32, 191, 128, 165, 30, ID_JOIN);
+    add("BUTTON", "Create", WS_TABSTOP | BS_DEFPUSHBUTTON as u32, 16, 128, 165, 30, ID_HOST);
+    add("BUTTON", "Join", WS_TABSTOP | BS_PUSHBUTTON as u32, 191, 128, 165, 30, ID_JOIN);
     add("STATIC", status_text(), 0, 16, 170, 340, 36, ID_STATUS);
     SetTimer(hwnd, TIMER, 500, None);
     SetForegroundWindow(hwnd);
