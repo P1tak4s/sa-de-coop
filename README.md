@@ -28,7 +28,7 @@ and password, and you play the story together, each on your own PC with your own
 - Sessions through **Steam lobbies**: a name and a password, no port forwarding, no IP addresses
   (a direct IP mode with a join code is also in the installer)
 - Your friend in your world: walking, running, driving, the same weapon, a name over their head and a map blip
-- Ride as a passenger in your friend's car
+- Ride along in your friend's car; when it is full (a two-seater in a mission) or a bike, you ride on the trunk or behind the rider
 - **Down, not dead**: below 40 health you fall instead of dying. A red banner at the top counts down 30 seconds;
   your friend walks up and holds **E** for 3 seconds to get you up. Nobody in time: the normal death
 - Shared clock, weather and wanted level; cutscenes and mission start/end are shared
@@ -81,8 +81,8 @@ The host's story is the one you both play. The friend's own story is not touched
 | Key | What it does |
 | --- | --- |
 | **F9** or **Esc → co-op** | open / close the co-op screen |
-| **G** (next to your friend's car) | sit next to your friend as a passenger |
-| **F** / **Enter** | get out of the car |
+| **G** (next to your friend's car) | ride along: a free seat, or on the trunk / behind the rider on a bike when the car is full (you can shoot from there) |
+| **F** / **Enter** | get out of the car, or get off the trunk / bike |
 | **E** (hold 3 s next to a downed friend) | revive them |
 | **H** (AI partner, next to a car) | the partner drives you to your map waypoint; **H** again to stop |
 
