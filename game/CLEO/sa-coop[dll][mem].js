@@ -169,7 +169,12 @@ function remoteWithCar(car) {
 function writeMine(me) {
   const p = me.getCoordinates();
   let v = { x: 0, y: 0, z: 0 }, q = { x: 0, y: 0, z: 0, w: 1 }, carSpeed = 0, inCar = 0, carModel = 0, carHealth = 0;
-  if (me.isInAnyCar()) {
+  if (ridingOutside && !Car.DoesExist(ridingOutside.car)) getOffOutside(me);
+  if (ridingOutside) {
+    const c = ridingOutside.car.getCoordinates();
+    p.x = c.x; p.y = c.y; p.z = c.z;
+    inCar = 2; carModel = ridingOutside.slot; carHealth = SEAT_OUTSIDE;
+  } else if (me.isInAnyCar()) {
     const car = me.storeCarIsInNoSave();
     const c = car.getCoordinates();
     p.x = c.x; p.y = c.y; p.z = c.z;
@@ -177,7 +182,10 @@ function writeMine(me) {
     let driver = null;
     try { driver = car.getDriver(); } catch (e) {}
     if (ownerSlot >= 0 && !(driver && +driver === +me)) {
-      inCar = 2; carModel = ownerSlot; carHealth = 0; // riding with a friend: they send the car
+      // riding with a friend: they send the car; we send which seat we are in, so their copy of us takes the same
+      let seat = 0;
+      try { for (let i = 0; i < 3; i++) if (+car.getCharInCarPassengerSeat(i) === +me) { seat = i; break; } } catch (e) {}
+      inCar = 2; carModel = ownerSlot; carHealth = seat;
     } else {
       q = car.getQuaternion();
       carSpeed = car.getSpeed();
@@ -310,6 +318,7 @@ function removeRemote(slot) {
 }
 
 function driveRemote(r, s, now) {
+  if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; }
   if (!r.car || r.carModel !== s.carModel || !Car.DoesExist(r.car)) {
     dropCar(r);
     if (!loadModel(s.carModel)) return;
@@ -372,13 +381,19 @@ function rideRemote(r, s, mySlot, me) {
   } else if (remotes[driverSlot] && remotes[driverSlot].car) {
     car = remotes[driverSlot].car; // they sit in another friend's car
   }
-  if (!car) { r.ped.setCoordinatesNoOffset(s.x, s.y, s.z); return; }
-  if (!r.ped.isInAnyCar()) {
-    try { r.ped.warpIntoCarAsPassenger(car, s.carHealth); } catch (e) { log(`[sa-coop] passenger: ${e}`); }
-  }
+  if (!car) { if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; } r.ped.setCoordinatesNoOffset(s.x, s.y, s.z); return; }
+  if (r.ped.isInAnyCar() || (r.outside && +r.outside === +car)) return;
+  try {
+    // their seat here may hold someone else (Sweet in a mission): then they ride outside, nobody is pulled out
+    const seat = s.carHealth;
+    const free = seat !== SEAT_OUTSIDE && seat >= 0 && car.isPassengerSeatFree(seat);
+    if (free) r.ped.warpIntoCarAsPassenger(car, seat);
+    else { attachOutside(r.ped, car); r.outside = car; }
+  } catch (e) { log(`[sa-coop] passenger: ${e}`); }
 }
 
 function walkRemote(r, s, now) {
+  if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; }
   if (r.car) dropCar(r);
   leaveCar(r, s);
   if (!r.lastPos) { r.lastPos = { x: s.x, y: s.y }; r.lastT = now; r.speed = 0; r.ux = 0; r.uy = 0; }
@@ -496,18 +511,64 @@ function syncRemotes(me, mySlot, now) {
   }
 }
 
-// G: sit next to the nearest friend who drives
+// ---- riding along: a free seat, else on the trunk / on the back of the bike ---------------------------------
+// Mission cars are often full (CJ + Sweet in a two-seater) or bikes: the second player then rides outside,
+// attached to the car, and can shoot. Nobody is ever pulled out of a seat for it.
+const SEAT_OUTSIDE = 100; // sent as the "seat" while attached outside
+
+function isBike(car) {
+  try { return Streaming.IsThisModelABike(car.getModel()) || Streaming.IsThisModelABoat(car.getModel()); } catch (e) { return false; }
+}
+
+// a free passenger seat, back seats first; -1 when there is none
+function freeSeat(car) {
+  try {
+    const n = car.getMaximumNumberOfPassengers();
+    for (const seat of [1, 2, 0]) if (seat < n && car.isPassengerSeatFree(seat)) return seat;
+  } catch (e) {}
+  return -1;
+}
+
+// hold `ped` on the outside of `car`: behind the rider on a bike (facing forward), on the trunk of a car (facing back)
+function attachOutside(ped, car) {
+  let weapon = 0;
+  try { weapon = ped.getCurrentWeapon(); } catch (e) {}
+  if (isBike(car)) ped.attachToCar(car, 0, -0.55, 0.55, 0, 180, weapon);
+  else ped.attachToCar(car, 0, -2.0, 0.65, 1, 180, weapon);
+}
+
+let ridingOutside = null; // { car, slot } while we sit on a friend's trunk or bike
+
+function getOffOutside(me) {
+  if (!ridingOutside) return;
+  try { me.detachFromCar(0, 0, 0, false); } catch (e) {}
+  try {
+    if (Car.DoesExist(ridingOutside.car)) {
+      const c = ridingOutside.car.getCoordinates();
+      me.setCoordinates(c.x + 2.5, c.y + 1, c.z);
+    }
+  } catch (e) {}
+  ridingOutside = null;
+}
+
+// G: ride with the nearest friend who drives: a free seat, else outside on the car
 function tryRideAlong(me) {
-  if (me.isInAnyCar() || downed) return;
+  if (me.isInAnyCar() || downed || ridingOutside) return;
   const p = me.getCoordinates();
-  let best = null, bestD = 7 * 7;
-  for (const r of remotes) {
-    if (!r || !r.car || !Car.DoesExist(r.car)) continue;
+  let best = null, bestD = 7 * 7, bestSlot = -1;
+  remotes.forEach((r, slot) => {
+    if (!r || !r.car || !Car.DoesExist(r.car)) return;
     const d = dist2(p, r.car.getCoordinates());
-    if (d < bestD) { best = r; bestD = d; }
-  }
+    if (d < bestD) { best = r; bestD = d; bestSlot = slot; }
+  });
+  if (!best) return;
   // straight into the seat: the friend's car is moved every frame, which breaks the walk-in animation (CJ hung)
-  if (best) { try { me.warpIntoCarAsPassenger(best.car, 0); } catch (e) { log(`[sa-coop] G: ${e}`); } }
+  const seat = isBike(best.car) ? -1 : freeSeat(best.car);
+  try {
+    if (seat >= 0 && !(isBike(best.car))) me.warpIntoCarAsPassenger(best.car, seat);
+    else if (isBike(best.car) && freeSeat(best.car) === 0) me.warpIntoCarAsPassenger(best.car, 0);
+    else { attachOutside(me, best.car); ridingOutside = { car: best.car, slot: bestSlot }; say("SA Co-op: riding outside. F to get off"); }
+  } catch (e) { log(`[sa-coop] G: ${e}`); }
 }
 
 // ---- shared world: weather, cutscenes, missions (addresses for Steam build 1.0.113.49697469) ------------
@@ -861,7 +922,8 @@ while (true) {
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
   // F in a friend's car: straight out beside it (the car is moved every frame, which breaks the exit animation)
-  if (pressed(70) && me.isInAnyCar()) {
+  if (pressed(70) && ridingOutside) getOffOutside(me);
+  else if (pressed(70) && me.isInAnyCar()) {
     try {
       const car = me.storeCarIsInNoSave();
       if (remoteWithCar(car) >= 0) { const c = car.getCoordinates(); me.warpFromCarToCoord(c.x + 2.5, c.y + 1, c.z); }
