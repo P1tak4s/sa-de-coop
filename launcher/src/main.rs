@@ -15,7 +15,8 @@ fn main() -> eframe::Result {
         let log = match find_game() {
             Some(g) => {
                 let graphics = GRAPHICS.iter().position(|(n, _)| *n == current_graphics()).unwrap_or(2);
-                let (ok, lines) = run_install(&g, graphics, true);
+                let (grip, fast) = cars_choice(&g);
+                let (ok, lines) = run_install(&g, graphics, grip || !installed(&g), fast);
                 format!("ok={ok}
 {}
 ", lines.join("
@@ -138,13 +139,21 @@ fn install(game: &Path) -> Result<Vec<String>, String> {
     Ok(log)
 }
 
-// ---- better car handling: the game's own handling.cfg, retuned on this PC, packed as coopcars_P.pak ------------
-// More grip, stronger brakes, a little more pull, less wobble. Both players should use the same setting.
+// ---- car tuning: the game's own handling.cfg, retuned on this PC, packed as coopcars_P.pak ---------------------
+// Better handling: more grip, stronger brakes, a little more pull, less wobble.
+// Faster cars: top speed at least 200 for road cars and motorbikes, with the pull to get there.
+// Both players should pick the same. The choice is remembered in %LOCALAPPDATA%\sa-de-coop\cars.txt.
 const HANDLING: &str = "Gameface/Content/OriginalData/GTASA/data/handling.cfg";
+const FAST_TOP_SPEED: f32 = 200.0;
+/// Not made faster: trains, RC toys, bicycles and work machines (boats and aircraft are found in the file itself).
+const NOT_FAST: [&str; 19] = [
+    "FREIGHT", "STREAK", "TRAM", "FREIFLAT", "STREAKC", "RCBANDIT", "RCTIGER", "RCCAM", "BIKE", "BMX", "MTBIKE",
+    "FORKLIFT", "TRACTOR", "MOWER", "SWEEPER", "KART", "COMBINE", "TUG", "BAGGAGE",
+];
 
-/// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: J traction (8), O engine
-/// acceleration (13), Q drive type (15), R engine type (16), S brake deceleration (17), b suspension damping (22).
-fn retune_line(line: &str) -> String {
+/// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: J traction (8), N top speed (12),
+/// O engine acceleration (13), Q drive type (15), R engine type (16), S brake deceleration (17), b damping (22).
+fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::HashSet<String>) -> String {
     let t: Vec<&str> = line.split_whitespace().collect();
     let first = t.first().copied().unwrap_or("");
     let vehicle = t.len() > 22
@@ -155,25 +164,50 @@ fn retune_line(line: &str) -> String {
         return line.to_string();
     }
     let mut out: Vec<String> = t.iter().map(|s| s.to_string()).collect();
-    let scale = |out: &mut Vec<String>, i: usize, k: f32, max: f32| {
-        if let Ok(v) = out[i].parse::<f32>() {
-            out[i] = format!("{:.3}", (v * k).min(max));
+    let num = |out: &Vec<String>, i: usize| out[i].parse::<f32>().ok();
+    let set = |out: &mut Vec<String>, i: usize, v: f32| out[i] = format!("{v:.3}");
+    if grip {
+        for (i, k, max) in [(8, 1.12, 2.0), (13, 1.08, 100.0), (17, 1.25, 20.0), (22, 1.15, 1.0)] {
+            if let Some(v) = num(&out, i) {
+                set(&mut out, i, (v * k).min(max));
+            }
         }
-    };
-    scale(&mut out, 8, 1.12, 2.0); // traction
-    scale(&mut out, 13, 1.08, 100.0); // acceleration
-    scale(&mut out, 17, 1.25, 20.0); // brakes
-    scale(&mut out, 22, 1.15, 1.0); // damping: less bounce and body roll
+    }
+    if fast && !not_fast.contains(first) && !NOT_FAST.contains(&first) {
+        if let (Some(top), Some(acc)) = (num(&out, 12), num(&out, 13)) {
+            if top > 0.0 && top < FAST_TOP_SPEED {
+                // more pull in proportion, so a slow car can actually reach the new top speed
+                let k = (FAST_TOP_SPEED / top).sqrt().min(1.6);
+                set(&mut out, 12, FAST_TOP_SPEED);
+                set(&mut out, 13, (acc * k).min(100.0));
+            }
+        }
+    }
     out.join(" ")
 }
 
+fn cars_file() -> PathBuf {
+    PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join(r"sa-de-coop\cars.txt")
+}
+
+/// (better handling, faster cars) as last installed.
+fn cars_choice(game: &Path) -> (bool, bool) {
+    let pak = game.parent().and_then(|p| p.parent()).is_some_and(|g| g.join(r"Content\Paks\~mods\coopcars_P.pak").is_file());
+    match std::fs::read_to_string(cars_file()) {
+        Ok(t) if pak => (t.contains("grip=1"), t.contains("fast=1")),
+        _ => (pak, false),
+    }
+}
+
 /// Build or remove `~mods\coopcars_P.pak`.
-fn set_car_handling(extra: &Path, gameface: &Path, on: bool) -> Result<String, String> {
+fn set_car_handling(extra: &Path, gameface: &Path, grip: bool, fast: bool) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     let target = gameface.join(r"Content\Paks\~mods\coopcars_P.pak");
-    if !on {
+    let _ = std::fs::create_dir_all(cars_file().parent().unwrap());
+    let _ = std::fs::write(cars_file(), format!("grip={}\nfast={}\n", grip as u8, fast as u8));
+    if !grip && !fast {
         let _ = std::fs::remove_file(&target);
-        return Ok("Car handling: the game's own.".into());
+        return Ok("Cars: the game's own handling and speed.".into());
     }
     let repak = extra.join("repak.exe");
     if !repak.is_file() {
@@ -186,7 +220,13 @@ fn set_car_handling(extra: &Path, gameface: &Path, on: bool) -> Result<String, S
         return Err("could not read handling.cfg from the game".into());
     }
     let text = String::from_utf8_lossy(&o.stdout);
-    let tuned: Vec<String> = text.lines().map(retune_line).collect();
+    // boats (%) and aircraft ($) have extra lines that name them: never made faster
+    let not_fast: std::collections::HashSet<String> = text
+        .lines()
+        .filter(|l| l.starts_with(['%', '$']))
+        .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
+        .collect();
+    let tuned: Vec<String> = text.lines().map(|l| retune_line(l, grip, fast, &not_fast)).collect();
     let tmp = std::env::temp_dir().join("sa-coop-cars");
     let _ = std::fs::remove_dir_all(&tmp);
     let file = tmp.join("dst").join(HANDLING);
@@ -202,11 +242,12 @@ fn set_car_handling(extra: &Path, gameface: &Path, on: bool) -> Result<String, S
     std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::copy(&out, &target).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&tmp);
-    Ok("Better car handling on. Restart the game to feel it.".into())
-}
-
-fn car_handling_on(game: &Path) -> bool {
-    game.parent().and_then(|p| p.parent()).is_some_and(|g| g.join(r"Content\Paks\~mods\coopcars_P.pak").is_file())
+    Ok(match (grip, fast) {
+        (true, true) => "Better handling and faster cars on. Restart the game to feel it.",
+        (true, false) => "Better car handling on. Restart the game to feel it.",
+        _ => "Faster cars on. Restart the game to feel it.",
+    }
+    .into())
 }
 
 /// The co-op entry for the game's menus, made on this PC from this PC's own game files: the two menu templates come
@@ -505,14 +546,14 @@ fn uninstall(game: &Path) -> Vec<String> {
 }
 
 /// Everything the Install button does; runs on its own thread so the window never freezes.
-fn run_install(game: &Path, graphics: usize, cars: bool) -> (bool, Vec<String>) {
+fn run_install(game: &Path, graphics: usize, cars: bool, fast: bool) -> (bool, Vec<String>) {
     let mut log = match install(game) {
         Ok(l) => l,
         Err(e) => return (false, vec![e]),
     };
     log.push(set_graphics(GRAPHICS[graphics].1));
     if let Some(gf) = game.parent().and_then(|p| p.parent()) {
-        match set_car_handling(&bundle_dir().with_file_name("extra"), gf, cars) {
+        match set_car_handling(&bundle_dir().with_file_name("extra"), gf, cars, fast) {
             Ok(m) | Err(m) => log.push(m),
         }
     }
@@ -526,6 +567,7 @@ struct App {
     path_text: String,
     graphics: usize, // index into GRAPHICS
     cars: bool,
+    fast: bool,
     job: Option<Job>,
     result: Option<(bool, Vec<String>)>,
     art: (Option<egui::TextureHandle>, Option<egui::TextureHandle>),
@@ -539,16 +581,16 @@ impl App {
             "Off" | "your own" => 2,
             g => GRAPHICS.iter().position(|(n, _)| *n == g).unwrap_or(2),
         };
-        let cars = game.as_deref().map(|g| car_handling_on(g) || !installed(g)).unwrap_or(true);
+        let (cars, fast) = game.as_deref().map(|g| { let (c, f) = cars_choice(g); (c || !installed(g), f) }).unwrap_or((true, false));
         let art = steam_art(ctx, game.as_deref());
-        App { game, path_text: String::new(), graphics, cars, job: None, result: None, art }
+        App { game, path_text: String::new(), graphics, cars, fast, job: None, result: None, art }
     }
 
     fn start(&mut self, game: PathBuf) {
         let job: Job = Default::default();
-        let (j, g, c) = (job.clone(), self.graphics, self.cars);
+        let (j, g, c, f) = (job.clone(), self.graphics, self.cars, self.fast);
         std::thread::spawn(move || {
-            let r = run_install(&game, g, c);
+            let r = run_install(&game, g, c, f);
             *j.lock().unwrap() = Some(r);
         });
         self.result = None;
@@ -606,6 +648,8 @@ impl eframe::App for App {
                     ui.add_enabled_ui(!busy, |ui| {
                         ui.checkbox(&mut self.cars, "Better car handling");
                         ui.label(egui::RichText::new("Cars grip the road better and brake harder. Pick the same as your friend.").small().color(MUTED));
+                        ui.checkbox(&mut self.fast, "Faster cars");
+                        ui.label(egui::RichText::new("Every car and motorbike can reach at least 200 km/h. Boats, planes and trains stay as they are.").small().color(MUTED));
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label("Graphics");
