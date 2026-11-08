@@ -180,6 +180,56 @@ struct Hosting {
     players: Players,
 }
 
+// ---- graphics presets: extra\graphics\Engine-<level>.ini -> the game's Engine.ini ---------------------------
+// Only our own file (first line "; SA Co-op graphics") is ever replaced or removed; a player's own Engine.ini is
+// kept as Engine.ini.before-sa-coop the first time.
+const GRAPHICS: [(&str, &str); 4] = [("Off", ""), ("Balanced", "balanced"), ("High", "high"), ("Ultra", "ultra")];
+
+fn engine_ini() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE").map(|u| {
+        PathBuf::from(u).join(r"Documents\Rockstar Games\GTA San Andreas Definitive Edition\Config\WindowsNoEditor\Engine.ini")
+    })
+}
+
+fn current_graphics() -> &'static str {
+    let Some(text) = engine_ini().and_then(|p| std::fs::read_to_string(p).ok()) else { return "Off" };
+    let first = text.lines().next().unwrap_or("").to_lowercase();
+    if !first.starts_with("; sa co-op graphics") {
+        return "your own";
+    }
+    ["ultra", "high", "balanced"].into_iter().find(|f| first.contains(&format!("graphics, {f}"))).map(|f| match f { "ultra" => "Ultra", "high" => "High", _ => "Balanced" }).unwrap_or("Balanced")
+}
+
+fn set_graphics(level: &str) -> String {
+    let Some(ini) = engine_ini() else { return "No user folder.".into() };
+    let ours = std::fs::read_to_string(&ini).map(|t| t.starts_with("; SA Co-op graphics")).unwrap_or(false);
+    if ini.exists() && !ours {
+        let keep = ini.with_file_name("Engine.ini.before-sa-coop");
+        if !keep.exists() && std::fs::copy(&ini, &keep).is_err() {
+            return "Could not back up your own Engine.ini, nothing changed.".into();
+        }
+    }
+    if level.is_empty() {
+        if ours {
+            let _ = std::fs::remove_file(&ini);
+        }
+        let keep = ini.with_file_name("Engine.ini.before-sa-coop");
+        if keep.exists() {
+            let _ = std::fs::rename(&keep, &ini);
+            return "Graphics: your own Engine.ini is back.".into();
+        }
+        return "Graphics: the game's own look.".into();
+    }
+    let src = bundle_dir().with_file_name("extra").join("graphics").join(format!("Engine-{level}.ini"));
+    if let Some(dir) = ini.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match std::fs::copy(&src, &ini) {
+        Ok(_) => format!("Graphics set to {level}. Restart the game to see it."),
+        Err(e) => format!("Could not set graphics: {e}"),
+    }
+}
+
 struct App {
     game: Option<PathBuf>,
     nick: String,
@@ -254,6 +304,14 @@ impl eframe::App for App {
                             Err(e) => self.msg.push(e),
                         }
                     }
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Graphics (now: {}):", current_graphics()));
+                        for (name, file) in GRAPHICS {
+                            if ui.button(name).clicked() {
+                                self.msg.push(set_graphics(file));
+                            }
+                        }
+                    });
                 }
             }
             ui.separator();

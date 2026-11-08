@@ -106,6 +106,29 @@ files on your PC; only a one-line description of the situation is sent.
 
 Without any key he still follows you and shoots enemies close to you.
 
+## Better graphics
+
+**Presets (in the installer):** `sa-coop.exe` has **Graphics: Off / Balanced / High / Ultra** buttons. They write the
+game's `Engine.ini`; restart the game to see the change.
+
+| Preset | For | What it adds |
+| --- | --- | --- |
+| Balanced | any GPU | sharper image, longer view distance, better shadows, no motion blur |
+| High | RTX 3060 / RX 6600 and up | 125 % render resolution, better anti-aliasing, ambient occlusion, reflections on wet roads and cars, longer shadows |
+| Ultra | RTX 4070 / RX 7800 XT and up | 150 % render resolution, 8K shadows, the longest view distance |
+
+Your own `Engine.ini`, if you had one, is kept as `Engine.ini.before-sa-coop`; **Off** puts it back.
+
+**ReShade (optional, a different look):**
+
+1. Download [ReShade](https://reshade.me) and run its setup. Pick `SanAndreas.exe` in
+   `Gameface\Binaries\Win64`, choose **DirectX 10/11/12**, and tick the effect packages **Standard effects** and
+   **qUINT by Marty McFly**.
+2. Copy `extra\reshade\SA-Coop-ReShade.ini` from the release into the same `Win64` folder.
+3. In game press **Home**, choose `SA-Coop-ReShade.ini` as the preset. **Scroll Lock** turns the effects on and off.
+
+The preset adds a light sharpen, a little more colour and contrast, and removes banding in the sky.
+
 ## Saves
 
 The co-op screen has a **Mine / Co-op** switch. Co-op games are saved separately, so a co-op session never
