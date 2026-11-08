@@ -1,0 +1,27 @@
+// Icon, version and description shown in Explorer, Task Manager and SmartScreen (an exe without them looks shady).
+1 ICON "icon.ico"
+1 VERSIONINFO
+FILEVERSION 0,3,0,0
+PRODUCTVERSION 0,3,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "SA Co-op (open source, github.com/P1tak4s/sa-de-coop)"
+      VALUE "FileDescription", "SA Co-op installer for GTA San Andreas - The Definitive Edition"
+      VALUE "FileVersion", "0.3.0"
+      VALUE "InternalName", "sa-coop"
+      VALUE "LegalCopyright", "MIT License. Not affiliated with Rockstar Games."
+      VALUE "OriginalFilename", "sa-coop.exe"
+      VALUE "ProductName", "SA Co-op"
+      VALUE "ProductVersion", "0.3.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

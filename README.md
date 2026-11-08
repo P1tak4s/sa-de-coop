@@ -26,7 +26,6 @@ and password, and you play the story together, each on your own PC with your own
 
 - A **co-op** entry in the main menu and the pause menu, opening a co-op screen styled like the game's options
 - Sessions through **Steam lobbies**: a name and a password, no port forwarding, no IP addresses
-  (a direct IP mode with a join code is also in the installer)
 - Your friend in your world: walking, running, driving, the same weapon, a name over their head and a map blip
 - Ride along in your friend's car; when it is full (a two-seater in a mission) or a bike, you ride on the trunk or behind the rider
 - **Down, not dead**: below 40 health you fall instead of dying. A red banner at the top counts down 30 seconds;
@@ -48,19 +47,22 @@ clothes, the train mission special case.
 
 ## Install (step by step)
 
+<img src="docs/installer.png" alt="The SA Co-op installer: game found, options, Play" width="420">
+
 1. Close the game.
 2. Open [**Releases**](https://github.com/P1tak4s/sa-de-coop/releases) and download `SA-Coop-<version>-windows-x64.zip`.
 3. Unpack the zip anywhere, for example to `Downloads\SA-Coop`. Keep the folders together: `sa-coop.exe` needs the
    `game` and `extra` folders next to it.
 4. Run **`sa-coop.exe`**. Windows SmartScreen may warn about an unknown app: click **More info → Run anyway**
    (the exe is not code-signed; you can build it yourself, see [Build from source](#build-from-source)).
-5. The installer finds the game by itself in all your Steam libraries. Click **Install / update mod**. It:
+5. The installer finds the game by itself in all your Steam libraries. Pick the options (better car handling,
+   graphics preset) and click **Install**. It:
    - copies the mod loader (Ultimate ASI Loader, CLEO Redux), `coopnet64.asi` and the scripts into
      `...\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64`
    - builds the **co-op** menu entry on your PC from your own game files (nothing from Rockstar is in the download)
    - copies the menu fonts from your own game files
-   - adds the graphics settings (`Engine.ini`), only if you have none
-6. Start the game from Steam as usual. You should see **co-op** in the main menu.
+   - sets the graphics preset and car handling you picked
+6. Click **Play** (or start the game from Steam as usual). You should see **co-op** in the main menu.
 
 Your friend does the same on their PC.
 
@@ -108,8 +110,8 @@ Without any key he still follows you and shoots enemies close to you.
 
 ## Better graphics
 
-**Presets (in the installer):** `sa-coop.exe` has **Graphics: Off / Balanced / High / Ultra** buttons. They write the
-game's `Engine.ini`; restart the game to see the change.
+**Presets (in the installer):** pick **Off / Balanced / High / Ultra** in `sa-coop.exe` and click **Install** or
+**Update / reinstall**. It writes the game's `Engine.ini`; restart the game to see the change.
 
 | Preset | For | What it adds |
 | --- | --- | --- |
@@ -136,7 +138,7 @@ overwrites your own story. Before switching, the mod copies your saves to `%LOCA
 
 ## Troubleshooting
 
-- **No co-op entry in the menu**: run `sa-coop.exe` again and press **Install / update mod**. **F9** still opens the
+- **No co-op entry in the menu**: run `sa-coop.exe` again and press **Update / reinstall**. **F9** still opens the
   co-op screen in game.
 - **The game crashes at start**: check that your game build is 1.0.113.49697469 (Steam may have updated the game).
   The mod's log is `%LOCALAPPDATA%\sa-de-coop\coopnet.log`; please open an issue with it.
@@ -148,7 +150,7 @@ overwrites your own story. Before switching, the mod copies your saves to `%LOCA
 
 ## Uninstall
 
-Delete these from `Gameface\Binaries\Win64`: `version.dll`, `cleo_redux64.asi`, `coopnet64.asi` and the `CLEO`
+The installer has an **Uninstall** button. By hand: delete these from `Gameface\Binaries\Win64`: `version.dll`, `cleo_redux64.asi`, `coopnet64.asi` and the `CLEO`
 folder. Delete `Gameface\Content\Paks\~mods\coop_P.pak`. If the installer created your `Engine.ini`
 (`Documents\Rockstar Games\GTA San Andreas Definitive Edition\Config\WindowsNoEditor\Engine.ini`), delete it too.
 Your saves stay where they are.
@@ -158,10 +160,10 @@ Your saves stay where they are.
 | Part | What it does |
 | --- | --- |
 | `proto/` | wire format (80-byte player state, events, join code) |
-| `relay/` | UDP relay server for the IP mode, UPnP |
+| `relay/` | UDP relay server for the direct IP mode (testing), UPnP |
 | `coopnet/` | `coopnet64.asi`: networking (Steam lobby + P2P, or UDP), the in-game co-op screen (hudhook / Dear ImGui), the menu hook, AI partner calls |
 | `game/CLEO/` | CLEO Redux scripts: friend sync, passenger, revive, names, world sync, your car, AI partner |
-| `launcher/` | `sa-coop.exe`: installer and IP-mode host/join |
+| `launcher/` | `sa-coop.exe`: the installer (finds the game, installs, graphics, car handling, Play) |
 | `menu-mod/tool/` | MenuPatch (UAssetAPI): adds the co-op entry to the game's menu templates |
 | `tools/` | `dll_test.py` (loopback test without the game), `botas.py` (a test friend bot) |
 
