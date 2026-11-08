@@ -31,6 +31,7 @@ pub struct Steam {
     create_lobby: unsafe extern "C" fn(P, i32, i32) -> u64,
     request_list: unsafe extern "C" fn(P) -> u64,
     add_filter: unsafe extern "C" fn(P, *const c_char, *const c_char, i32),
+    add_distance_filter: unsafe extern "C" fn(P, i32),
     lobby_by_index: unsafe extern "C" fn(P, i32) -> u64,
     set_data: unsafe extern "C" fn(P, u64, *const c_char, *const c_char) -> bool,
     get_data: unsafe extern "C" fn(P, u64, *const c_char) -> *const c_char,
@@ -93,6 +94,7 @@ impl Steam {
                 create_lobby: sym!(m, "SteamAPI_ISteamMatchmaking_CreateLobby", _),
                 request_list: sym!(m, "SteamAPI_ISteamMatchmaking_RequestLobbyList", _),
                 add_filter: sym!(m, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListStringFilter", _),
+                add_distance_filter: sym!(m, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListDistanceFilter", _),
                 lobby_by_index: sym!(m, "SteamAPI_ISteamMatchmaking_GetLobbyByIndex", _),
                 set_data: sym!(m, "SteamAPI_ISteamMatchmaking_SetLobbyData", _),
                 get_data: sym!(m, "SteamAPI_ISteamMatchmaking_GetLobbyData", _),
@@ -153,6 +155,8 @@ impl Steam {
     /// Find the lobby by name, check the password and enter it. Err: what to tell the player.
     pub fn join(&self, name: &str, pw_hash: &str) -> Result<u64, &'static str> {
         unsafe {
+            // worldwide: by default Steam only lists lobbies near you, so a friend abroad would not find yours
+            (self.add_distance_filter)(self.mm, 3);
             (self.add_filter)(self.mm, cs("sacoop").as_ptr(), cs("1").as_ptr(), 0);
             (self.add_filter)(self.mm, cs("name").as_ptr(), cs(&name.to_lowercase()).as_ptr(), 0);
         }

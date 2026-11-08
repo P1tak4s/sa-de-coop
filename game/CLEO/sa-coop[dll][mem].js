@@ -636,7 +636,7 @@ function hearWorld(me) {
     else if (kind === EV.CUTSCENE) playCutscene(text, me);
     else if (kind === 4 || kind === 5) onMissionEvent(kind, text);
     else if (kind === 6 || kind === 7) onStoryEvent(kind, text);
-    else if (kind === EV.MISSION) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
+    else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
 }
 
@@ -783,6 +783,64 @@ function onMissionEvent(kind, text) {
   }
 }
 
+// ---- catching up: J jumps to your friend (into a free seat, onto the trunk, or next to them) -------------------
+// A mission runs in one game; the other player left far behind is no help and can strand the story. During a
+// mission, more than 200 m away for 8 s, a banner offers J. J works any time.
+let friendMission = "", farSince = 0;
+const KEY_J = 74, FAR = 200;
+try { FxtStore.insert("COOPFAR", "Your homie is far away. Press J to jump to them"); } catch (e) {}
+
+function nearestFriend(me) {
+  const p = me.getCoordinates();
+  let best = null, bestD = Infinity, slot = -1;
+  remotes.forEach((r, i) => {
+    if (!r || !Char.DoesExist(r.ped)) return;
+    const d = dist2(p, r.ped.getCoordinates());
+    if (d < bestD) { best = r; bestD = d; slot = i; }
+  });
+  return best ? { r: best, slot, d: Math.sqrt(bestD) } : null;
+}
+
+function jumpToFriend(me) {
+  const f = nearestFriend(me);
+  if (!f || downed) return;
+  const r = f.r;
+  try {
+    if (ridingOutside) getOffOutside(me);
+    if (me.isInAnyCar()) { const c = me.getCoordinates(); me.warpFromCarToCoord(c.x, c.y, c.z); }
+    const area = r.area || 0;
+    Streaming.SetAreaVisible(area);
+    me.setAreaVisible(area);
+    if (r.car && Car.DoesExist(r.car)) {
+      const seat = isBike(r.car) ? (freeSeat(r.car) === 0 ? 0 : -1) : freeSeat(r.car);
+      if (seat >= 0) me.warpIntoCarAsPassenger(r.car, seat);
+      else { attachOutside(me, r.car); ridingOutside = { car: r.car, slot: f.slot }; }
+    } else {
+      const c = r.ped.getCoordinates();
+      Streaming.RequestCollision(c.x, c.y);
+      Streaming.LoadScene(c.x, c.y, c.z);
+      me.setCoordinates(c.x + 1.5, c.y + 1, c.z);
+    }
+    farSince = 0;
+    say("SA Co-op: you jumped to your friend");
+  } catch (e) { log(`[sa-coop] J: ${e}`); }
+}
+
+function catchUpTick(me, now) {
+  if (pressed(KEY_J)) { jumpToFriend(me); return; }
+  const mission = ONMISSION || friendMission;
+  const f = mission ? nearestFriend(me) : null;
+  if (!f || f.d < FAR || downed) { farSince = 0; return; }
+  if (!farSince) farSince = now;
+  if (now - farSince > 8000) {
+    try {
+      Text.UseCommands(true); Text.SetFont(1); Text.SetScale(0.45, 1.8); Text.SetCenter(true);
+      Text.SetColor(255, 200, 80, 255); Text.SetDropshadow(2, 0, 0, 0, 255);
+      Text.Display(320, 30, "COOPFAR");
+    } catch (e) {}
+  }
+}
+
 // ---- one story for both (Saints Row 2 style): the host plays the story, the guest joins it -------------------
 // Guest: its own missions are switched off ($ONMISSION held at 1, so no mission markers or triggers), and it sees
 // the host's mission text and destination blips. Host: sends them. Addresses: Steam build 1.0.113.49697469.
@@ -921,6 +979,7 @@ while (true) {
   hearWorld(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
+  catchUpTick(me, now);
   // F in a friend's car: straight out beside it (the car is moved every frame, which breaks the exit animation)
   if (pressed(70) && ridingOutside) getOffOutside(me);
   else if (pressed(70) && me.isInAnyCar()) {
