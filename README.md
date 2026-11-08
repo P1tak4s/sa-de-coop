@@ -1,53 +1,106 @@
-# SA Co-op
+<p align="center">
+  <img src="docs/icon.png" alt="SA Co-op icon" width="96">
+</p>
 
-Online co-op for **GTA San Andreas – The Definitive Edition** (PC, Steam). It works like Saints Row 2: pick
-**co-op** in the game's own menu, create a session with a name and a password, your friend joins with the same name
-and password, and you play the story together, each on your own PC with your own copy of the game.
+<h1 align="center">SA Co-op</h1>
 
-> **Status: early, work in progress.** Most of it has been tested with a bot friend on one PC; a full play-through
-> with two real players over Steam has not been done yet. Expect bugs. The mod keeps co-op saves apart from yours and
-> backs your saves up (see [Saves](#saves)).
+<p align="center">
+  <b>Play the GTA San Andreas story together, online.</b><br>
+  A co-op mod for <b>GTA San Andreas: The Definitive Edition</b> (PC, Steam). Each player on their own PC, with their own copy of the game.
+</p>
 
-## Contents
+<p align="center">
+  <a href="https://github.com/P1tak4s/sa-de-coop/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/P1tak4s/sa-de-coop?include_prereleases&label=release&color=2e9640"></a>
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-2e9640"></a>
+  <img alt="Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-555">
+  <img alt="Game build" src="https://img.shields.io/badge/game%20build-1.0.113.49697469-555">
+  <img alt="Status" src="https://img.shields.io/badge/status-early%20test%20build-e8862f">
+</p>
 
-- [What works](#what-works)
-- [Requirements](#requirements)
-- [Install (step by step)](#install-step-by-step)
-- [Play with a friend](#play-with-a-friend)
-- [Controls](#controls)
-- [AI partner (playing alone)](#ai-partner-playing-alone)
-- [Saves](#saves)
-- [Troubleshooting](#troubleshooting)
-- [Uninstall](#uninstall)
-- [Build from source](#build-from-source)
-- [Credits and licence](#credits-and-licence)
+<p align="center">
+  <a href="https://github.com/P1tak4s/sa-de-coop/releases/latest"><b>Download</b></a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="#troubleshooting">Troubleshooting</a>
+</p>
 
-## What works
+---
 
-- A **co-op** entry in the main menu and the pause menu, opening a co-op screen styled like the game's options
-- Sessions through **Steam lobbies**: a name and a password, no port forwarding, no IP addresses
-- Your friend in your world: walking, running, driving, the same weapon, a name over their head and a map blip
-- Ride along in your friend's car; when it is full (a two-seater in a mission) or a bike, you ride on the trunk or behind the rider
-- **Down, not dead**: below 40 health you fall instead of dying. A red banner at the top counts down 30 seconds;
-  your friend walks up and holds **E** for 3 seconds to get you up. Nobody in time: the normal death
-- Shared clock, weather and wanted level; cutscenes and mission start/end are shared
-- An optional **AI partner** for when you play alone
-- Your last car is remembered (map blip), also after save/load
-- Optional graphics settings: sharper image, longer view distance, better shadows, no motion blur
+SA Co-op adds a **co-op** option to the game's own menu, the way Saints Row 2 did it. One player creates a session
+with a name and a password, the other joins with the same two words, and you play through one story together:
+shared missions, cutscenes, weather and time, riding in each other's cars, and reviving each other when one goes down.
+No servers to rent, no ports to open: sessions run through Steam.
 
-Not yet, or not tested: full mission sync for two real players (enemies, shared money), your friend wearing CJ's
-clothes, the train mission special case.
+<p align="center">
+  <img src="docs/installer.png" alt="The SA Co-op installer: it finds the game, you pick the options, then Install and Play" width="420">
+</p>
+
+> [!NOTE]
+> **Early test build.** Most features are tested with a bot partner on one PC. A full play-through by two players
+> over Steam has not been done yet, so expect rough edges. Co-op progress is saved apart from your own story, and
+> your saves are backed up before anything touches them. Bug reports are very welcome in
+> [Issues](https://github.com/P1tak4s/sa-de-coop/issues).
+
+## Quick start
+
+1. **Download** the latest `SA-Coop-<version>-windows-x64.zip` from [Releases](https://github.com/P1tak4s/sa-de-coop/releases) and unpack it.
+2. **Run `sa-coop.exe`**. It finds the game in your Steam libraries. Pick the options and click **Install**, then **Play**.
+3. In the main menu pick **co-op**. One of you **creates** a session, the other **joins** with the same name and password.
+
+Your friend does the same on their PC. The full walkthrough is in [Install (step by step)](#install-step-by-step).
+
+## Features
+
+| | |
+| --- | --- |
+| **Co-op from the menu** | A **co-op** entry in the main and pause menus opens a screen styled like the game's options. Sessions are Steam lobbies found by name and password, worldwide, with no port forwarding. |
+| **One story for both** | The host's story is the one you play. Mission text, map markers and cutscenes reach both players. |
+| **Together in the world** | Your friend walks, runs and drives in your world with their weapon, a name tag and a map blip. Clock, weather and wanted level are shared. |
+| **Ride along** | **G** puts you in your friend's car. When it is full, or a bike, you ride on the trunk or behind the rider and can still shoot. |
+| **Down, not dead** | Below 40 health you fall instead of dying. A 30-second countdown appears, and your friend holds **E** to get you up. |
+| **Catch up** | **J** jumps you to your friend: into a free seat, onto the trunk, or beside them. During a mission the game offers it when you fall far behind. |
+| **AI partner** | Playing alone? A Grove Street partner follows you, rides in the back, fights rival gangs, revives you and can drive you to your waypoint. Decisions come from TypeSafe Jev or OpenAI with your own key. |
+| **Better graphics** | Presets from Balanced to Ultra: higher render resolution, ambient occlusion, reflections, sharper and longer shadows. An optional ReShade look is included. |
+| **Better car handling** | Optional: more grip, stronger brakes, a bit more pull and less body roll, built from your own game files. |
+| **Safe for your saves** | Co-op saves live apart from your own story, with automatic backups. **Uninstall** removes everything the mod added. |
+
+**Not yet, or not tested:** full mission sync for two real players (shared enemies and money), your friend wearing
+CJ's clothes, and the train mission special case.
 
 ## Requirements
 
-- A **legally owned** copy of GTA San Andreas – The Definitive Edition on **Steam**, game build
-  **1.0.113.49697469**. The mod reads game memory at fixed addresses for this build; other builds will not work.
-- Windows 10 or 11 (64-bit)
-- For co-op: your friend needs their own PC and their own Steam copy of the game. Pirated copies are not supported.
+- A **legally owned** copy of GTA San Andreas: The Definitive Edition on **Steam**, game build **1.0.113.49697469**.
+  The mod reads game memory at fixed addresses for this build; other builds will not work.
+- Windows 10 or 11 (64-bit).
+- For co-op, your friend needs their own PC and their own Steam copy. Pirated copies are not supported.
+
+## FAQ
+
+**Is it safe to run?**
+All of the source is in this repository, and the release is built from it. The installer shows exactly what it
+changes and has an **Uninstall** button. Windows SmartScreen may warn because the exe is not code-signed (signing
+certificates are paid); click **More info**, then **Run anyway**, or build it yourself.
+
+**Does it ship any Rockstar files?**
+No. The co-op menu entry, the fonts and the car handling are built on your PC from your own copy of the game.
+
+**Can I get banned?**
+The Definitive Edition has no online mode or anti-cheat, and the mod does not touch Rockstar's services. Sessions
+go through ordinary Steam lobbies.
+
+**Do both players need the game?**
+Yes, each player needs their own Steam copy.
+
+**Will it mess up my story save?**
+No. Co-op games are saved separately, and your own saves are copied to `%LOCALAPPDATA%\sa-de-coop\saves-backup`
+before the mod switches anything.
+
+**Does it work with the original 2004 game or the Rockstar Games Launcher version?**
+No, only the Steam version of the Definitive Edition, build 1.0.113.49697469. For the classic game, see
+[SA:COOP](https://github.com/Karimov-Akbar/sa-coop).
 
 ## Install (step by step)
-
-<img src="docs/installer.png" alt="The SA Co-op installer: game found, options, Play" width="420">
 
 1. Close the game.
 2. Open [**Releases**](https://github.com/P1tak4s/sa-de-coop/releases) and download `SA-Coop-<version>-windows-x64.zip`.
