@@ -9,11 +9,32 @@ const STEAM_APP: &str = "steam://rungameid/1547000";
 const GAME_SUBDIR: &str = r"steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64";
 
 fn main() -> eframe::Result {
+    // sa-coop.exe --install: no window, same steps as the Install button (current options), log in
+    // %LOCALAPPDATA%\sa-de-coop\setup.log. For testing and for people who script their setups.
+    if std::env::args().any(|a| a == "--install") {
+        let log = match find_game() {
+            Some(g) => {
+                let graphics = GRAPHICS.iter().position(|(n, _)| *n == current_graphics()).unwrap_or(2);
+                let (ok, lines) = run_install(&g, graphics, true);
+                format!("ok={ok}
+{}
+", lines.join("
+"))
+            }
+            None => "ok=false
+game not found
+".into(),
+        };
+        let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("sa-de-coop");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("setup.log"), log);
+        return Ok(());
+    }
     let icon = egui::IconData { rgba: include_bytes!("../assets/icon64.rgba").to_vec(), width: 64, height: 64 };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SA Co-op installer")
-            .with_inner_size([520.0, 600.0])
+            .with_inner_size([520.0, 660.0])
             .with_resizable(false)
             .with_icon(icon),
         ..Default::default()
@@ -39,8 +60,47 @@ fn find_game() -> Option<PathBuf> {
 }
 
 /// The files to put next to SanAndreas.exe live in `game\` beside this exe (same layout).
+/// The mod files packed into this exe by build.rs (empty in a development build).
+static PAYLOAD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/payload.bin"));
+
+/// Unpack the payload once per run into %TEMP%\sa-coop-setup-<version>; returns its game\ folder.
+fn unpacked() -> Option<PathBuf> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let count = u32::from_le_bytes(PAYLOAD.get(0..4)?.try_into().ok()?) as usize;
+        if count == 0 {
+            return None;
+        }
+        let root = std::env::temp_dir().join(format!("sa-coop-setup-{}", env!("CARGO_PKG_VERSION")));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut at = 4;
+        for _ in 0..count {
+            let n = u16::from_le_bytes(PAYLOAD.get(at..at + 2)?.try_into().ok()?) as usize;
+            let name = std::str::from_utf8(PAYLOAD.get(at + 2..at + 2 + n)?).ok()?;
+            at += 2 + n;
+            let len = u64::from_le_bytes(PAYLOAD.get(at..at + 8)?.try_into().ok()?) as usize;
+            at += 8;
+            let data = PAYLOAD.get(at..at + len)?;
+            at += len;
+            if name.contains("..") {
+                return None;
+            }
+            let path = root.join(name.replace('/', "\\"));
+            std::fs::create_dir_all(path.parent()?).ok()?;
+            std::fs::write(&path, data).ok()?;
+        }
+        Some(root.join("game"))
+    })
+    .clone()
+}
+
 fn bundle_dir() -> PathBuf {
-    std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("game"))).unwrap_or_else(|| PathBuf::from("game"))
+    if let Some(dir) = unpacked() {
+        return dir;
+    }
+    // release layout: SA-Coop.exe next to files\game and files\extra (older layout: game\ and extra\ beside it)
+    let here = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)).unwrap_or_default();
+    if here.join(r"files\game").is_dir() { here.join(r"files\game") } else { here.join("game") }
 }
 
 fn copy_tree(from: &Path, to: &Path, log: &mut Vec<String>) -> std::io::Result<()> {
@@ -282,65 +342,52 @@ fn set_graphics(level: &str) -> String {
 }
 
 // THESIS:    one button puts co-op into the player's own game; nothing about it may look shady
-// AUDIENCE:  a GTA fan at home, maybe wary of random exes; Windows, any GPU
-// WORLD:     San Andreas at dusk: the sunset over the skyline, Grove Street green, the game's own Beckett title font
-// SIGNATURE: the sunset header with the title in Beckett; everything below is calm and dark
-// SYSTEM:    Beckett (from the player's game) + egui default; dark #141216, accent Grove green, 4/8/16/24 spacing
+// AUDIENCE:  a GTA fan at home, rightly wary of unknown exes; Windows
+// WORLD:     a game launcher: near black, white headings, one yellow accent (same family as the VC co-op installer)
+// SIGNATURE: the game's own hero art and logo at the top, read from this PC's Steam library cache (never shipped)
+// SYSTEM:    Segoe UI from Windows, greys on #0D0D0D, yellow only on the primary button and the active choice
 
-const BG: egui::Color32 = egui::Color32::from_rgb(20, 18, 22);
-const CARD: egui::Color32 = egui::Color32::from_rgb(30, 27, 34);
-const CARD_HI: egui::Color32 = egui::Color32::from_rgb(44, 40, 50);
-const TEXT: egui::Color32 = egui::Color32::from_rgb(236, 232, 226);
-const MUTED: egui::Color32 = egui::Color32::from_rgb(160, 152, 148);
-const GREEN: egui::Color32 = egui::Color32::from_rgb(46, 150, 64);
-const GREEN_HI: egui::Color32 = egui::Color32::from_rgb(60, 176, 80);
-const RED: egui::Color32 = egui::Color32::from_rgb(232, 96, 80);
+const BG: egui::Color32 = egui::Color32::from_rgb(13, 13, 13);
+const CARD: egui::Color32 = egui::Color32::from_rgb(23, 23, 23);
+const CARD_HI: egui::Color32 = egui::Color32::from_rgb(38, 38, 42);
+const TEXT: egui::Color32 = egui::Color32::from_rgb(244, 244, 244);
+const MUTED: egui::Color32 = egui::Color32::from_rgb(150, 150, 156);
+const YELLOW: egui::Color32 = egui::Color32::from_rgb(252, 175, 23);
+const GREEN_HI: egui::Color32 = egui::Color32::from_rgb(92, 200, 110);
+const RED: egui::Color32 = egui::Color32::from_rgb(240, 100, 86);
 const REPO: &str = "https://github.com/P1tak4s/sa-de-coop";
 
-/// The game's own Beckett font from this PC's copy (cached by an earlier install, or read from the pak now).
-fn title_font(game: Option<&Path>) -> Option<Vec<u8>> {
-    let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join(r"sa-de-coop\fonts");
-    if let Ok(b) = std::fs::read(dir.join("Beckett.ttf")) {
-        return Some(b);
-    }
-    use std::os::windows::process::CommandExt;
-    let gf = game?.parent()?.parent()?;
-    let o = std::process::Command::new(bundle_dir().with_file_name("extra").join("repak.exe"))
-        .arg("get")
-        .arg(gf.join(r"Content\Paks\pakchunk0-WindowsNoEditor.pak"))
-        .arg("Gameface/Content/Common/Fonts/Beckett.ufont")
-        .creation_flags(0x0800_0000)
-        .output()
-        .ok()?;
-    (o.status.success() && o.stdout.len() > 1000).then(|| {
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join("Beckett.ttf"), &o.stdout);
-        o.stdout
-    })
-}
 
-fn style(ctx: &egui::Context, beckett: Option<Vec<u8>>) {
+fn style(ctx: &egui::Context, _game_font: Option<Vec<u8>>) {
     let mut fonts = egui::FontDefinitions::default();
-    let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
-    if let Some(b) = beckett {
-        fonts.font_data.insert("beckett".into(), egui::FontData::from_owned(b).into());
-        let mut fam = vec!["beckett".to_string()];
-        fam.extend(fallback);
-        fonts.families.insert(egui::FontFamily::Name("beckett".into()), fam);
-    } else {
-        fonts.families.insert(egui::FontFamily::Name("beckett".into()), fallback);
+    for (name, file) in [("segoe", r"C:\Windows\Fonts\segoeui.ttf"), ("segoe-sb", r"C:\Windows\Fonts\seguisb.ttf")] {
+        if let Ok(bytes) = std::fs::read(file) {
+            fonts.font_data.insert(name.into(), egui::FontData::from_owned(bytes).into());
+        }
     }
+    let prop = fonts.families[&egui::FontFamily::Proportional].clone();
+    if fonts.font_data.contains_key("segoe") {
+        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "segoe".into());
+    }
+    let strong = if fonts.font_data.contains_key("segoe-sb") { vec!["segoe-sb".to_string()] } else { prop };
+    // the family is still called "beckett" so the rest of the code needs no change
+    fonts.families.insert(egui::FontFamily::Name("beckett".into()), strong);
     ctx.set_fonts(fonts);
     let mut v = egui::Visuals::dark();
     v.panel_fill = BG;
     v.window_fill = BG;
-    v.override_text_color = Some(TEXT);
-    v.selection.bg_fill = GREEN;
-    v.hyperlink_color = egui::Color32::from_rgb(250, 170, 80);
+    // no override_text_color: it would paint selected labels white on the yellow fill
+    v.widgets.noninteractive.fg_stroke.color = TEXT;
+    v.widgets.inactive.fg_stroke.color = TEXT;
+    v.widgets.hovered.fg_stroke.color = egui::Color32::WHITE;
+    v.widgets.active.fg_stroke.color = egui::Color32::WHITE;
+    v.selection.bg_fill = YELLOW;
+    v.selection.stroke = egui::Stroke::new(1.0_f32, egui::Color32::BLACK);
+    v.hyperlink_color = YELLOW;
     v.widgets.inactive.weak_bg_fill = CARD_HI;
     v.widgets.inactive.bg_fill = CARD_HI;
-    v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(58, 52, 64);
-    v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(66, 60, 72);
+    v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(52, 52, 58);
+    v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(62, 62, 68);
     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
         w.corner_radius = egui::CornerRadius::same(6);
     }
@@ -354,39 +401,67 @@ fn style(ctx: &egui::Context, beckett: Option<Vec<u8>>) {
     });
 }
 
-/// The sunset header: dusk sky into orange, the title in Beckett.
-fn header(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 128.0), egui::Sense::hover());
-    let mut mesh = egui::Mesh::default();
-    let stops = [
-        (0.0, egui::Color32::from_rgb(40, 20, 56)),
-        (0.6, egui::Color32::from_rgb(196, 78, 60)),
-        (0.86, egui::Color32::from_rgb(240, 140, 52)),
-        (1.0, BG),
-    ];
-    for (k, (t, c)) in stops.iter().enumerate() {
-        let y = rect.top() + rect.height() * t;
-        mesh.colored_vertex(egui::pos2(rect.left(), y), *c);
-        mesh.colored_vertex(egui::pos2(rect.right(), y), *c);
-        if k > 0 {
-            let b = (k as u32) * 2;
-            mesh.add_triangle(b - 2, b - 1, b);
-            mesh.add_triangle(b - 1, b + 1, b);
+/// Steam's own library art for the game on this PC: (hero, logo). Read at run time, never shipped with the mod.
+fn steam_art(ctx: &egui::Context, game: Option<&Path>) -> (Option<egui::TextureHandle>, Option<egui::TextureHandle>) {
+    // ...\steamapps\common\<game>\Gameface\Binaries\Win64 -> the Steam folder is the default one; the cache is there
+    let _ = game;
+    let dir = PathBuf::from(r"C:\Program Files (x86)\Steam\appcache\librarycache\1547000");
+    let load = |file: &str| -> Option<egui::TextureHandle> {
+        let img = image::open(dir.join(file)).ok()?;
+        // the hero art is 3840 px wide: more than a GL texture may hold here, which closed the window
+        let img = if img.width() > 1200 { img.thumbnail(1200, 1200) } else { img };
+        let img = img.to_rgba8();
+        let (w, h) = img.dimensions();
+        let ci = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
+        Some(ctx.load_texture(format!("sa-{file}"), ci, egui::TextureOptions::LINEAR))
+    };
+    (load("library_hero.jpg"), load("logo.png"))
+}
+
+/// The top of the window: the game's hero art (cropped to fill), a fade into the page, the logo and our name.
+fn header(ui: &mut egui::Ui, art: &(Option<egui::TextureHandle>, Option<egui::TextureHandle>)) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 190.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    match &art.0 {
+        Some(tex) => {
+            let [tw, th] = tex.size();
+            let (ta, ra) = (tw as f32 / th as f32, rect.width() / rect.height());
+            let uv = if ta > ra {
+                let w = ra / ta;
+                egui::Rect::from_min_max(egui::pos2(0.5 - w / 2.0, 0.0), egui::pos2(0.5 + w / 2.0, 1.0))
+            } else {
+                let h = ta / ra;
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.5 - h / 2.0), egui::pos2(1.0, 0.5 + h / 2.0))
+            };
+            p.image(tex.id(), rect, uv, egui::Color32::WHITE);
+        }
+        None => {
+            p.rect_filled(rect, 0, egui::Color32::from_rgb(28, 22, 18));
         }
     }
-    let p = ui.painter();
+    let fade = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 100.0), rect.max);
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(fade.left_top(), egui::Color32::TRANSPARENT);
+    mesh.colored_vertex(fade.right_top(), egui::Color32::TRANSPARENT);
+    mesh.colored_vertex(fade.left_bottom(), BG);
+    mesh.colored_vertex(fade.right_bottom(), BG);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
     p.add(egui::Shape::mesh(mesh));
-    let title = egui::FontId::new(48.0, egui::FontFamily::Name("beckett".into()));
-    let at = egui::pos2(rect.left() + 24.0, rect.top() + 22.0);
-    p.text(at + egui::vec2(2.0, 2.0), egui::Align2::LEFT_TOP, "SA Co-op", title.clone(), egui::Color32::from_black_alpha(140));
-    p.text(at, egui::Align2::LEFT_TOP, "SA Co-op", title, egui::Color32::WHITE);
-    p.text(
-        egui::pos2(rect.left() + 26.0, rect.top() + 82.0),
-        egui::Align2::LEFT_TOP,
-        "Online co-op for GTA San Andreas: The Definitive Edition",
-        egui::FontId::proportional(14.0),
-        egui::Color32::from_rgb(255, 236, 214),
-    );
+    let strong = egui::FontId::new(26.0, egui::FontFamily::Name("beckett".into()));
+    match &art.1 {
+        Some(logo) => {
+            let [lw, lh] = logo.size();
+            let h = 64.0_f32;
+            let w = (lw as f32 / lh as f32 * h).min(rect.width() * 0.5);
+            let at = egui::Rect::from_min_size(egui::pos2(rect.left() + 24.0, rect.bottom() - w / (lw as f32 / lh as f32) - 20.0), egui::vec2(w, w / (lw as f32 / lh as f32)));
+            p.image(logo.id(), at, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            p.text(egui::pos2(rect.right() - 24.0, rect.bottom() - 22.0), egui::Align2::RIGHT_BOTTOM, "CO-OP", strong, YELLOW);
+        }
+        None => {
+            p.text(egui::pos2(rect.left() + 24.0, rect.bottom() - 22.0), egui::Align2::LEFT_BOTTOM, "SA CO-OP", strong, TEXT);
+        }
+    }
 }
 
 fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
@@ -403,8 +478,8 @@ fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R)
 }
 
 fn big_button(ui: &mut egui::Ui, text: &str, primary: bool) -> egui::Response {
-    let fill = if primary { GREEN } else { CARD_HI };
-    let b = egui::Button::new(egui::RichText::new(text).size(19.0).color(egui::Color32::WHITE).strong())
+    let (fill, ink) = if primary { (YELLOW, egui::Color32::BLACK) } else { (CARD_HI, TEXT) };
+    let b = egui::Button::new(egui::RichText::new(text).size(19.0).color(ink).strong())
         .fill(fill)
         .corner_radius(8)
         .min_size(egui::vec2(ui.available_width(), 46.0));
@@ -453,18 +528,20 @@ struct App {
     cars: bool,
     job: Option<Job>,
     result: Option<(bool, Vec<String>)>,
+    art: (Option<egui::TextureHandle>, Option<egui::TextureHandle>),
 }
 
 impl App {
     fn new(ctx: &egui::Context) -> App {
         let game = find_game();
-        style(ctx, title_font(game.as_deref()));
+        style(ctx, None);
         let graphics = match current_graphics() {
             "Off" | "your own" => 2,
             g => GRAPHICS.iter().position(|(n, _)| *n == g).unwrap_or(2),
         };
         let cars = game.as_deref().map(|g| car_handling_on(g) || !installed(g)).unwrap_or(true);
-        App { game, path_text: String::new(), graphics, cars, job: None, result: None }
+        let art = steam_art(ctx, game.as_deref());
+        App { game, path_text: String::new(), graphics, cars, job: None, result: None, art }
     }
 
     fn start(&mut self, game: PathBuf) {
@@ -493,28 +570,29 @@ impl eframe::App for App {
         }
         let busy = self.job.is_some();
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ctx, |ui| {
-            header(ui);
+            header(ui, &self.art);
             egui::Frame::new().inner_margin(egui::Margin { left: 20, right: 20, top: 4, bottom: 16 }).show(ui, |ui| {
                 // 1. the game
-                let game = card(ui, "GAME", |ui| match self.game.clone() {
+                let game = card(ui, "YOUR GAME", |ui| match self.game.clone() {
                     Some(g) => {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("✔").color(GREEN_HI).strong());
-                            ui.label("Found in your Steam library");
+                            ui.label("GTA San Andreas: The Definitive Edition")
+                                .on_hover_text(g.display().to_string());
                         });
-                        ui.add(egui::Label::new(egui::RichText::new(g.display().to_string()).small().color(MUTED)).truncate());
+                        ui.label(egui::RichText::new("Found in your Steam library.").small().color(MUTED));
                         Some(g)
                     }
                     None => {
-                        ui.label(egui::RichText::new("Not found in your Steam libraries.").color(RED));
-                        ui.label("Paste the game folder (the one that has Gameface inside):");
+                        ui.label(egui::RichText::new("We could not find the game in Steam.").color(RED));
+                        ui.label("Paste the game's folder here (the one with the Gameface folder inside):");
                         ui.text_edit_singleline(&mut self.path_text);
                         if ui.button("Use this folder").clicked() {
                             let p = PathBuf::from(self.path_text.trim()).join(r"Gameface\Binaries\Win64");
                             if p.join("SanAndreas.exe").is_file() {
                                 self.game = Some(p);
                             } else {
-                                self.result = Some((false, vec!["SanAndreas.exe is not in that folder.".into()]));
+                                self.result = Some((false, vec!["That folder does not have the game in it.".into()]));
                             }
                         }
                         None
@@ -526,16 +604,18 @@ impl eframe::App for App {
                 // 2. options
                 card(ui, "OPTIONS", |ui| {
                     ui.add_enabled_ui(!busy, |ui| {
-                        ui.checkbox(&mut self.cars, "Better car handling: more grip, stronger brakes");
+                        ui.checkbox(&mut self.cars, "Better car handling");
+                        ui.label(egui::RichText::new("Cars grip the road better and brake harder. Pick the same as your friend.").small().color(MUTED));
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label("Graphics");
                             for (i, (name, _)) in GRAPHICS.iter().enumerate() {
-                                ui.selectable_value(&mut self.graphics, i, *name);
+                                let ink = if self.graphics == i { egui::Color32::BLACK } else { TEXT };
+                                ui.selectable_value(&mut self.graphics, i, egui::RichText::new(*name).color(ink));
                             }
                         });
                         ui.label(
-                            egui::RichText::new("High for most PCs (RTX 3060 and up), Ultra for RTX 4070 and up. Off keeps the game's own look.")
+                            egui::RichText::new("High suits most gaming PCs. Ultra needs a strong graphics card. Off keeps the original look.")
                                 .small()
                                 .color(MUTED),
                         );
@@ -547,13 +627,13 @@ impl eframe::App for App {
                 if busy {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Installing… this takes a few seconds.");
+                        ui.label("Installing. This takes a few seconds…");
                     });
                 } else if is_installed {
                     if big_button(ui, "Play", true).clicked() {
                         start_game();
                     }
-                    if big_button(ui, "Apply options / reinstall", false).clicked() {
+                    if big_button(ui, "Save options", false).clicked() {
                         self.start(game.clone());
                     }
                 } else if big_button(ui, "Install", true).clicked() {
@@ -562,9 +642,9 @@ impl eframe::App for App {
 
                 if let Some((ok, log)) = &self.result {
                     let (icon, text, color) = if *ok {
-                        ("✔", "Done. Click Play, then pick co-op in the game's main menu.", GREEN_HI)
+                        ("✔", "Ready. Press Play, then choose Co-op in the game's main menu.", GREEN_HI)
                     } else {
-                        ("✖", "Something went wrong. Details below.", RED)
+                        ("✖", "That did not work. See the details below.", RED)
                     };
                     ui.label(egui::RichText::new(format!("{icon} {text}")).color(color));
                     egui::CollapsingHeader::new("Details").default_open(!*ok).show(ui, |ui| {
@@ -573,12 +653,12 @@ impl eframe::App for App {
                         }
                     });
                 }
-                egui::CollapsingHeader::new("What this installer changes").show(ui, |ui| {
+                egui::CollapsingHeader::new("What does this change on my PC?").show(ui, |ui| {
                     for line in [
-                        "Adds to the game's Win64 folder: version.dll (ASI Loader), cleo_redux64.asi (CLEO Redux), coopnet64.asi and the CLEO folder.",
-                        "Adds Content\\Paks\\~mods\\coop_P.pak (the co-op menu entry) and coopcars_P.pak (car handling), both built from your own game files.",
-                        "Writes Engine.ini for the graphics preset. Your own Engine.ini is kept as Engine.ini.before-sa-coop.",
-                        "Never touches your saves or other game files. Uninstall removes everything.",
+                        "Adds the co-op mod to your game folder. Nothing else on your PC is touched.",
+                        "Your saved games are not changed. Co-op has its own saves.",
+                        "The co-op menu button and car handling are made from your own game files. No game files are downloaded.",
+                        "Uninstall removes everything and puts your game back as it was.",
                     ] {
                         ui.label(egui::RichText::new(format!("• {line}")).small().color(MUTED));
                     }
@@ -587,9 +667,9 @@ impl eframe::App for App {
                 // footer
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.horizontal(|ui| {
-                        ui.hyperlink_to(egui::RichText::new("Open source on GitHub").small(), REPO);
+                        ui.hyperlink_to(egui::RichText::new("Free and open source").small(), REPO);
                         ui.label(
-                            egui::RichText::new(format!("v{}  ·  not affiliated with Rockstar Games", env!("CARGO_PKG_VERSION")))
+                            egui::RichText::new(format!("v{}  ·  Not made by Rockstar Games", env!("CARGO_PKG_VERSION")))
                                 .small()
                                 .color(MUTED),
                         );

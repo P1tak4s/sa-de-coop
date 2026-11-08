@@ -45,7 +45,7 @@ No servers to rent, no ports to open: sessions run through Steam.
 ## Quick start
 
 1. **Download** the latest `SA-Coop-<version>-windows-x64.zip` from [Releases](https://github.com/P1tak4s/sa-de-coop/releases) and unpack it.
-2. **Run `sa-coop.exe`**. It finds the game in your Steam libraries. Pick the options and click **Install**, then **Play**.
+2. **Run `SA-Coop.exe`**. It finds the game in your Steam libraries. Pick the options and click **Install**, then **Play**.
 3. In the main menu pick **co-op**. One of you **creates** a session, the other **joins** with the same name and password.
 
 Your friend does the same on their PC. The full walkthrough is in [Install (step by step)](#install-step-by-step).
@@ -104,9 +104,8 @@ No, only the Steam version of the Definitive Edition, build 1.0.113.49697469. Fo
 
 1. Close the game.
 2. Open [**Releases**](https://github.com/P1tak4s/sa-de-coop/releases) and download `SA-Coop-<version>-windows-x64.zip`.
-3. Unpack the zip anywhere, for example to `Downloads\SA-Coop`. Keep the folders together: `sa-coop.exe` needs the
-   `game` and `extra` folders next to it.
-4. Run **`sa-coop.exe`**. Windows SmartScreen may warn about an unknown app: click **More info → Run anyway**
+3. Unpack the zip anywhere, for example to `Downloads\SA-Coop`. Keep the `files` folder next to `SA-Coop.exe`.
+4. Run **`SA-Coop.exe`**. Windows SmartScreen may warn about an unknown app: click **More info → Run anyway**
    (the exe is not code-signed; you can build it yourself, see [Build from source](#build-from-source)).
 5. The installer finds the game by itself in all your Steam libraries. Pick the options (better car handling,
    graphics preset) and click **Install**. It:
@@ -163,8 +162,8 @@ Without any key he still follows you and shoots enemies close to you.
 
 ## Better graphics
 
-**Presets (in the installer):** pick **Off / Balanced / High / Ultra** in `sa-coop.exe` and click **Install** or
-**Update / reinstall**. It writes the game's `Engine.ini`; restart the game to see the change.
+**Presets (in the installer):** pick **Off / Balanced / High / Ultra** in `SA-Coop.exe` and click **Install** or
+**Save options**. It writes the game's `Engine.ini`; restart the game to see the change.
 
 | Preset | For | What it adds |
 | --- | --- | --- |
@@ -191,7 +190,7 @@ overwrites your own story. Before switching, the mod copies your saves to `%LOCA
 
 ## Troubleshooting
 
-- **No co-op entry in the menu**: run `sa-coop.exe` again and press **Update / reinstall**. **F9** still opens the
+- **No co-op entry in the menu**: run `SA-Coop.exe` again and press **Save options**. **F9** still opens the
   co-op screen in game.
 - **The game crashes at start**: check that your game build is 1.0.113.49697469 (Steam may have updated the game).
   The mod's log is `%LOCALAPPDATA%\sa-de-coop\coopnet.log`; please open an issue with it.
@@ -216,7 +215,7 @@ Your saves stay where they are.
 | `relay/` | UDP relay server for the direct IP mode (testing), UPnP |
 | `coopnet/` | `coopnet64.asi`: networking (Steam lobby + P2P, or UDP), the in-game co-op screen (hudhook / Dear ImGui), the menu hook, AI partner calls |
 | `game/CLEO/` | CLEO Redux scripts: friend sync, passenger, revive, names, world sync, your car, AI partner |
-| `launcher/` | `sa-coop.exe`: the installer (finds the game, installs, graphics, car handling, Play) |
+| `launcher/` | `SA-Coop.exe`: the installer (finds the game, installs, graphics, car handling, Play) |
 | `menu-mod/tool/` | MenuPatch (UAssetAPI): adds the co-op entry to the game's menu templates |
 | `tools/` | `dll_test.py` (loopback test without the game), `botas.py` (a test friend bot) |
 
@@ -224,12 +223,13 @@ Needs Rust stable (MSVC toolchain), CMake and the .NET 8 SDK.
 
 ```
 cargo build --release
-dotnet publish menu-mod/tool -c Release -r win-x64 --self-contained
+dotnet publish menu-mod/tool -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=partial -p:EnableCompressionInSingleFile=true
 ```
 
-`target/release/coopnet64.dll` is installed as `coopnet64.asi`. Release zip layout: `sa-coop.exe`; `game/` (the
-files from `game/` plus `coopnet64.asi`); `extra/` (`MenuPatch.exe`, `repak.exe`, `Engine.ini` from `game-config/`,
-`THIRD_PARTY.txt`).
+`target/release/coopnet64.dll` is installed as `coopnet64.asi`. Release zip layout: `SA-Coop.exe` (from
+`target/release/sa-coop.exe`), `README.txt`, and `files/` with `game/` (the files from `game/` plus `coopnet64.asi`)
+and `extra/` (`MenuPatch.exe`, `repak.exe`, `Engine.ini` and `graphics/` from `game-config/`, `reshade/`).
+The installer window shows the game's art and logo from the player's own Steam library cache; none is shipped.
 
 ## Credits and licence
 
