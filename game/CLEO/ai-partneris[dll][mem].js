@@ -316,9 +316,9 @@ function handleDown(me) {
   try { if (me.getCurrentWeapon() !== 0) me.setCurrentWeapon(0); if (!me.isPlayingAnim("KO_skid_back")) Task.PlayAnim(me, "KO_skid_back", "PED", 4.0, false, false, false, true, -1); } catch (e) {}
   if (now - cjDownAt > BLEED_OUT || ped.getHealth() <= 0) { cjUp(me, 0); return false; }
   const a = me.getCoordinates();
-  if (d2(a, ped.getCoordinates()) > 2 * 2) {
+  if (d2(a, ped.getCoordinates()) > 2.2 * 2.2) {
     reviveStart = 0;
-    try { if (ped.isInAnyCar()) ped.warpFromCarToCoord(a.x + 2, a.y + 1, a.z); else if (now - lastMove > 1000) { lastMove = now; Task.GoStraightToCoord(ped, a.x, a.y, a.z, 7, 1500); } } catch (e) {}
+    try { if (ped.isInAnyCar()) ped.warpFromCarToCoord(a.x + 2, a.y + 1, a.z); else if (now - lastMove > 1000) { lastMove = now; Task.GoStraightToCoord(ped, a.x + 1.2, a.y + 0.6, a.z, 7, 1500); } } catch (e) {}
     return true;
   }
   if (!reviveStart) { reviveStart = now; try { Task.StandStill(ped, REVIVE_MS); } catch (e) {} }

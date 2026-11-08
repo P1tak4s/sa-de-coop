@@ -1973,6 +1973,7 @@ dependencies = [
  "eframe",
  "embed-resource",
  "image",
+ "ureq",
 ]
 
 [[package]]

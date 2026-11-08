@@ -1,7 +1,11 @@
 /// <reference path=".config/sa.d.ts" />
-// Tougher enemies (optional, the installer puts this file in CLEO or takes it out): armed enemies around you aim
-// better, shoot more often and take more hits. Grove Street, cops, civilians, your AI partner and your friends'
-// copies are left alone.
+// Tougher enemies (a mod setting: installer or the co-op menu's Settings tab, works at once): armed enemies around
+// you aim better, shoot more often and take more hits. Grove Street, cops, civilians, your AI partner and your
+// friends' copies are left alone.
+let lib;
+for (const path of ["coopnet64.asi", "../coopnet64.asi"]) { lib = DynamicLibrary.Load(path); if (lib) break; }
+if (!lib) exit("coopnet64.asi not found");
+const setting = Memory.Fn.X64(lib.getProcedure("coop_setting"));
 const RADIUS = 50;
 const SKIP_TYPES = [4, 5, 6, 8, 24]; // civilians, cops, Grove Street, mission-1 (the AI partner)
 const ACCURACY = 75, SHOOT_RATE = 85, HEALTH_X = 1.5, HEALTH_MAX = 250;
@@ -27,7 +31,7 @@ log("[tougher-enemies] on");
 
 while (true) {
   wait(1000);
-  if (!player.isPlaying()) continue;
+  if (!player.isPlaying() || setting(2) !== 1) continue;
   try {
     const me = player.getChar(), p = me.getCoordinates();
     for (const c of nearbyPeds(p, RADIUS)) {

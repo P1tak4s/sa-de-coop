@@ -66,6 +66,9 @@ Your friend does the same on their PC. The full walkthrough is in [Install (step
 | **Faster cars** | Optional: every road car and motorbike can reach at least 200 km/h, with the pull to get there. Boats, planes, trains and bicycles stay as they are. |
 | **Harder fights** | Optional: guns reach 60% further, and armed enemies aim better, shoot more often and take more hits. |
 | **Session settings** | The host picks **friendly fire** (off or on) and the **revive time** (30 or 60 seconds) in the co-op menu; they apply to everyone in the session. |
+| **Settings in the game** | The co-op menu has a **Settings** tab with every option above plus graphics and DLSS. Tougher enemies changes at once; the rest is applied when you close the game. |
+| **Latest NVIDIA DLSS** | Optional: swaps the game's DLSS 2.3.4 (2021) for NVIDIA's newest, downloaded from NVIDIA. Turn DLSS on in the game's Graphics settings. RTX cards only. |
+| **Host on your PC** | No Steam session needed: **Host on my PC** gives a short code like `K3M9-QX2`; your friend types it with your password. Needs UDP port 7790 open (the mod tries UPnP). |
 | **Safe for your saves** | Co-op saves live apart from your own story, with automatic backups. **Uninstall** removes everything the mod added. |
 
 **Not yet, or not tested:** full mission sync for two real players (shared enemies and money), your friend wearing
@@ -130,6 +133,11 @@ Both of you must be logged in to Steam.
 2. **Friend**: in the main menu pick **co-op**, open the **Join** tab, type the **same** name and password, press
    **Join**, then load a save. You are placed in the host's world.
 3. In game you can open the co-op screen any time: **Esc → co-op**, or **F9**.
+
+**Without Steam sessions:** the host opens **Create**, types a password and presses **Host on my PC (short code)**.
+The code (for example `K3M9-QX2`) appears and is copied. The friend opens **Join**, types the code in
+**Session name or code**, the same password, and presses **Join**. If the friend cannot get in, your router did not
+open UDP port 7790: use a Steam session instead.
 
 The host's story is the one you both play. The friend's own story is not touched (see [Saves](#saves)).
 

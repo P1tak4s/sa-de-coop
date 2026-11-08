@@ -11,11 +11,14 @@ const GAME_SUBDIR: &str = r"steamapps\common\GTA San Andreas - The Definitive Ed
 fn main() -> eframe::Result {
     // sa-coop.exe --install: no window, same steps as the Install button (current options), log in
     // %LOCALAPPDATA%\sa-de-coop\setup.log. For testing and for people who script their setups.
+    if std::env::args().any(|a| a == "--apply-when-closed") {
+        apply_when_closed();
+        return Ok(());
+    }
     if std::env::args().any(|a| a == "--install") {
         let log = match find_game() {
             Some(g) => {
-                let graphics = GRAPHICS.iter().position(|(n, _)| *n == current_graphics()).unwrap_or(2);
-                let (ok, lines) = run_install(&g, graphics, load_opts(&g));
+                let (ok, lines) = run_install(&g, load_opts(&g));
                 format!("ok={ok}
 {}
 ", lines.join("
@@ -134,6 +137,16 @@ fn install(game: &Path) -> Result<Vec<String>, String> {
         let _ = std::fs::remove_file(game.join(old));
     }
     log.push("Mod installed.".into());
+    // Win64\sa-coop\: this exe and extra\, so the co-op menu can apply option changes after the game closes
+    let helper = game.join("sa-coop");
+    let _ = std::fs::create_dir_all(&helper);
+    if let Ok(me) = std::env::current_exe() {
+        if me.parent() != Some(helper.as_path()) {
+            let _ = std::fs::copy(&me, helper.join("SA-Coop.exe"));
+            let _ = copy_tree(&src.with_file_name("extra"), &helper.join("extra"), &mut vec![]);
+        }
+    }
+    for old in [r"CLEO\tougher-enemies.js", r"CLEO\tougher-enemies[dll].js"] { let _ = std::fs::remove_file(game.join(old)); } // now tougher-enemies[dll][mem].js, always in
     extras(game, &mut log);
     Ok(log)
 }
@@ -166,9 +179,9 @@ fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::
     let num = |out: &Vec<String>, i: usize| out[i].parse::<f32>().ok();
     let set = |out: &mut Vec<String>, i: usize, v: f32| out[i] = format!("{v:.3}");
     if grip {
-        // 2 turn mass (lower = turns in quicker), 8 traction, 10 traction bias (towards the front: less understeer at
-        // speed), 13 acceleration, 17 brakes, 20 steering lock, 22 damping
-        for (i, k, max) in [(2, 0.7, 50000.0), (8, 1.12, 2.0), (10, 1.06, 0.65), (13, 1.15, 100.0), (17, 1.25, 20.0), (20, 1.2, 45.0), (22, 1.15, 1.0)] {
+        // 2 turn mass (lower = turns in quicker; 0.7 spun cars out), 8 traction (more grip all round; moving the bias
+        // to the front made the rear slide), 13 acceleration, 17 brakes, 20 steering lock, 22 damping
+        for (i, k, max) in [(2, 0.85, 50000.0), (8, 1.2, 2.2), (13, 1.15, 100.0), (17, 1.25, 20.0), (20, 1.15, 45.0), (22, 1.15, 1.0)] {
             if let Some(v) = num(&out, i) {
                 set(&mut out, i, (v * k).min(max));
             }
@@ -194,13 +207,18 @@ struct Opts {
     fast: bool,
     range: bool,
     tough: bool,
+    gfx: usize, // index into GRAPHICS
+    dlss: bool,
 }
 
 fn save_opts(o: Opts) {
     let _ = std::fs::create_dir_all(cars_file().parent().unwrap());
     let _ = std::fs::write(
         cars_file(),
-        format!("grip={}\nfast={}\nrange={}\ntough={}\n", o.grip as u8, o.fast as u8, o.range as u8, o.tough as u8),
+        format!(
+            "grip={}\nfast={}\nrange={}\ntough={}\ngfx={}\ndlss={}\n",
+            o.grip as u8, o.fast as u8, o.range as u8, o.tough as u8, o.gfx, o.dlss as u8
+        ),
     );
 }
 
@@ -208,7 +226,13 @@ fn save_opts(o: Opts) {
 fn load_opts(game: &Path) -> Opts {
     let (grip, fast) = cars_choice(game);
     let t = std::fs::read_to_string(cars_file()).unwrap_or_default();
-    Opts { grip: grip || !installed(game), fast, range: t.contains("range=1"), tough: t.contains("tough=1") }
+    let gfx = t.lines().find_map(|l| l.trim().strip_prefix("gfx=")?.parse::<usize>().ok()).unwrap_or_else(|| {
+        match current_graphics() {
+            "Off" | "your own" => 2,
+            g => GRAPHICS.iter().position(|(n, _)| *n == g).unwrap_or(2),
+        }
+    });
+    Opts { grip: grip || !installed(game), fast, range: t.contains("range=1"), tough: t.contains("tough=1"), gfx: gfx.min(3), dlss: t.contains("dlss=1") }
 }
 
 fn cars_file() -> PathBuf {
@@ -376,6 +400,11 @@ fn current_graphics() -> &'static str {
 }
 
 fn set_graphics(level: &str) -> String {
+    set_graphics_dlss(level, false)
+}
+
+/// With DLSS on, DLSS picks the render resolution: our r.ScreenPercentage / TAA upsampling lines would fight it.
+fn set_graphics_dlss(level: &str, dlss: bool) -> String {
     let Some(ini) = engine_ini() else { return "No user folder.".into() };
     let ours = std::fs::read_to_string(&ini).map(|t| t.starts_with("; SA Co-op graphics")).unwrap_or(false);
     if ini.exists() && !ours {
@@ -399,7 +428,16 @@ fn set_graphics(level: &str) -> String {
     if let Some(dir) = ini.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    match std::fs::copy(&src, &ini) {
+    let text = match std::fs::read_to_string(&src) {
+        Ok(t) => t,
+        Err(e) => return format!("Could not set graphics: {e}"),
+    };
+    let text: String = if dlss {
+        text.lines().filter(|l| !l.starts_with("r.ScreenPercentage") && !l.starts_with("r.TemporalAA.Upsampling")).map(|l| format!("{l}\r\n")).collect()
+    } else {
+        text
+    };
+    match std::fs::write(&ini, text) {
         Ok(_) => format!("Graphics set to {level}. Restart the game to see it."),
         Err(e) => format!("Could not set graphics: {e}"),
     }
@@ -607,15 +645,86 @@ fn set_weapon_range(extra: &Path, gameface: &Path, on: bool) -> Result<String, S
     Ok("Longer gun range on. Restart the game to feel it.".into())
 }
 
-fn set_tough_enemies(extra: &Path, game: &Path, on: bool) -> String {
-    let dst = game.join(r"CLEO\tougher-enemies.js");
+
+// ---- DLSS: the game ships DLSS 2.3.4 (2021); the latest DLL comes from NVIDIA's own repository at install time
+const DLSS_URL: &str = "https://raw.githubusercontent.com/NVIDIA/DLSS/main/lib/Windows_x86_64/rel/nvngx_dlss.dll";
+
+fn dlss_dll(game: &Path) -> Option<PathBuf> {
+    // game = <root>\Gameface\Binaries\Win64
+    let root = game.parent()?.parent()?.parent()?;
+    Some(root.join(r"Engine\Plugins\Runtime\Nvidia\DLSS\Binaries\ThirdParty\Win64\nvngx_dlss.dll"))
+}
+
+fn set_dlss(game: &Path, on: bool) -> String {
+    let Some(dll) = dlss_dll(game) else { return "DLSS: game folder not recognised.".into() };
+    let orig = dll.with_file_name("nvngx_dlss.dll.orig");
     if !on {
-        let _ = std::fs::remove_file(&dst);
-        return "Enemies: the game's own.".into();
+        if orig.is_file() {
+            let _ = std::fs::copy(&orig, &dll);
+            let _ = std::fs::remove_file(&orig);
+            return "DLSS: the game's own version is back.".into();
+        }
+        return "DLSS: the game's own version.".into();
     }
-    match std::fs::copy(extra.join(r"optional\tougher-enemies.js"), &dst) {
-        Ok(_) => "Tougher enemies on.".into(),
-        Err(e) => format!("Could not turn on tougher enemies: {e}"),
+    if !dll.is_file() {
+        return "DLSS: this copy of the game has no DLSS.".into();
+    }
+    // already swapped (the game's own file is kept as .orig and ours is the big new one): no new 60 MB download
+    let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    if orig.is_file() && size(&dll) > 30_000_000 && size(&dll) != size(&orig) {
+        return "Latest NVIDIA DLSS is in place.".into();
+    }
+    if !orig.is_file() && std::fs::copy(&dll, &orig).is_err() {
+        return "DLSS: could not back up the game's DLSS file, nothing changed.".into();
+    }
+    let resp = match ureq::get(DLSS_URL).timeout(std::time::Duration::from_secs(120)).call() {
+        Ok(r) => r,
+        Err(e) => return format!("DLSS: download from NVIDIA failed ({e})."),
+    };
+    let mut bytes = Vec::new();
+    if std::io::Read::read_to_end(&mut std::io::Read::take(resp.into_reader(), 200_000_000), &mut bytes).is_err() || bytes.len() < 5_000_000 || !bytes.starts_with(b"MZ") {
+        return "DLSS: the download from NVIDIA was not a DLL, nothing changed.".into();
+    }
+    match std::fs::write(&dll, &bytes) {
+        Ok(_) => "Latest NVIDIA DLSS installed. Turn DLSS on in the game's Graphics settings.".into(),
+        Err(e) => format!("DLSS: could not replace the file ({e})."),
+    }
+}
+
+/// Everything from the options: graphics, car tuning, gun range, tougher enemies, DLSS. Used by Install,
+/// by --install and by --apply-when-closed (the co-op menu's Settings tab).
+fn apply_options(game: &Path, o: Opts) -> Vec<String> {
+    let mut log = vec![set_graphics_dlss(GRAPHICS[o.gfx].1, o.dlss)];
+    if let Some(gf) = game.parent().and_then(|p| p.parent()) {
+        let extra = bundle_dir().with_file_name("extra");
+        match set_car_handling(&extra, gf, o.grip, o.fast) {
+            Ok(m) | Err(m) => log.push(m),
+        }
+        match set_weapon_range(&extra, gf, o.range) {
+            Ok(m) | Err(m) => log.push(m),
+        }
+    }
+    log.push(if o.tough { "Tougher enemies on.".into() } else { "Enemies: the game's own.".into() });
+    log.push(set_dlss(game, o.dlss));
+    save_opts(o);
+    log
+}
+
+/// The co-op menu changed options while the game ran: wait until the game has closed (its pak files are no longer
+/// locked), then apply them. Gives up after 12 hours.
+fn apply_when_closed() {
+    let Some(game) = find_game() else { return };
+    let Some(probe) = game.parent().and_then(|p| p.parent()).map(|g| g.join(r"Content\Paks\~mods\coop_P.pak")) else { return };
+    for _ in 0..(12 * 3600 / 3) {
+        // the running game holds the pak open; opening it for writing succeeds only once the game is gone
+        if std::fs::OpenOptions::new().write(true).open(&probe).is_ok() {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let lines = apply_options(&game, load_opts(&game));
+            let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("sa-de-coop");
+            let _ = std::fs::write(dir.join("apply.log"), lines.join("\n"));
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
     }
 }
 
@@ -630,27 +739,18 @@ fn uninstall(game: &Path) -> Vec<String> {
         }
     }
     let g = set_graphics("");
-    vec!["Mod removed. Your saves are untouched.".into(), g]
+    let d = set_dlss(game, false);
+    let _ = std::fs::remove_dir_all(game.join("sa-coop"));
+    vec!["Mod removed. Your saves are untouched.".into(), g, d]
 }
 
 /// Everything the Install button does; runs on its own thread so the window never freezes.
-fn run_install(game: &Path, graphics: usize, o: Opts) -> (bool, Vec<String>) {
+fn run_install(game: &Path, o: Opts) -> (bool, Vec<String>) {
     let mut log = match install(game) {
         Ok(l) => l,
         Err(e) => return (false, vec![e]),
     };
-    log.push(set_graphics(GRAPHICS[graphics].1));
-    if let Some(gf) = game.parent().and_then(|p| p.parent()) {
-        let extra = bundle_dir().with_file_name("extra");
-        match set_car_handling(&extra, gf, o.grip, o.fast) {
-            Ok(m) | Err(m) => log.push(m),
-        }
-        match set_weapon_range(&extra, gf, o.range) {
-            Ok(m) | Err(m) => log.push(m),
-        }
-        log.push(set_tough_enemies(&extra, game, o.tough));
-    }
-    save_opts(o);
+    log.extend(apply_options(game, o));
     (installed(game), log)
 }
 
@@ -659,7 +759,6 @@ type Job = std::sync::Arc<std::sync::Mutex<Option<(bool, Vec<String>)>>>;
 struct App {
     game: Option<PathBuf>,
     path_text: String,
-    graphics: usize, // index into GRAPHICS
     opts: Opts,
     job: Option<Job>,
     result: Option<(bool, Vec<String>)>,
@@ -670,20 +769,16 @@ impl App {
     fn new(ctx: &egui::Context) -> App {
         let game = find_game();
         style(ctx, None);
-        let graphics = match current_graphics() {
-            "Off" | "your own" => 2,
-            g => GRAPHICS.iter().position(|(n, _)| *n == g).unwrap_or(2),
-        };
-        let opts = game.as_deref().map(load_opts).unwrap_or(Opts { grip: true, fast: false, range: false, tough: false });
+        let opts = game.as_deref().map(load_opts).unwrap_or(Opts { grip: true, fast: false, range: false, tough: false, gfx: 2, dlss: false });
         let art = steam_art(ctx, game.as_deref());
-        App { game, path_text: String::new(), graphics, opts, job: None, result: None, art }
+        App { game, path_text: String::new(), opts, job: None, result: None, art }
     }
 
     fn start(&mut self, game: PathBuf) {
         let job: Job = Default::default();
-        let (j, g, o) = (job.clone(), self.graphics, self.opts);
+        let (j, o) = (job.clone(), self.opts);
         std::thread::spawn(move || {
-            let r = run_install(&game, g, o);
+            let r = run_install(&game, o);
             *j.lock().unwrap() = Some(r);
         });
         self.result = None;
@@ -747,12 +842,15 @@ impl eframe::App for App {
                         ui.label(egui::RichText::new("Guns reach and lock on 60% further, for you and for everyone else.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.tough, "Tougher enemies");
                         ui.label(egui::RichText::new("Armed enemies aim better, shoot more often and take more hits.").small().color(MUTED));
+                        ui.checkbox(&mut self.opts.dlss, "Latest NVIDIA DLSS");
+                        ui.label(egui::RichText::new("Downloads NVIDIA's newest DLSS from NVIDIA (the game has a 2021 one). Then turn DLSS on in the game's Graphics settings. NVIDIA RTX cards only.").small().color(MUTED));
+                        ui.label(egui::RichText::new("You can change all of this later in the game too: Co-op menu, Settings.").small().color(MUTED));
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label("Graphics");
                             for (i, (name, _)) in GRAPHICS.iter().enumerate() {
-                                let ink = if self.graphics == i { egui::Color32::BLACK } else { TEXT };
-                                ui.selectable_value(&mut self.graphics, i, egui::RichText::new(*name).color(ink));
+                                let ink = if self.opts.gfx == i { egui::Color32::BLACK } else { TEXT };
+                                ui.selectable_value(&mut self.opts.gfx, i, egui::RichText::new(*name).color(ink));
                             }
                         });
                         ui.label(

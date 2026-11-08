@@ -26,6 +26,7 @@ pub struct CoopMenu {
     name: String,
     pw: String,
     join_tab: bool,
+    settings_tab: bool,
     fonts_ok: bool,
     last_status: i32,
 }
@@ -120,11 +121,17 @@ impl ImguiRenderLoop for CoopMenu {
             if self.fonts_ok && fonts.len() >= 3 { (Some(fonts[0]), Some(fonts[1]), Some(fonts[2])) } else { (None, None, None) };
         let mut close = false;
         let mut go = false;
-        let mut tab_click: Option<bool> = None;
-        let join_tab = self.join_tab;
+        let mut tab_click: Option<usize> = None;
+        let join_tab = self.join_tab && !self.settings_tab;
+        let settings_tab = self.settings_tab;
         // a running session (also the bot test) no longer blocks Create / Join: pressing it starts over
         let can = !self.name.trim().is_empty();
-        let st = status_text();
+        let st_owned = match (crate::status_code(), crate::current_code()) {
+            (1 | 2, Some(code)) if crate::is_host() => format!("Your code: {code} (copied). Friend: Join tab, code + your password."),
+            _ => status_text().to_string(),
+        };
+        let st = st_owned.as_str();
+        let mut host_pc = false;
         let name = &mut self.name;
         let pw = &mut self.pw;
         ui.window("##sacoop")
@@ -138,16 +145,17 @@ impl ImguiRenderLoop for CoopMenu {
                 let dl = ui.get_window_draw_list();
                 let origin = ui.cursor_screen_pos();
                 // ---- tabs (Beckett, like "controls / gameplay / graphics")
-                let tab_w = w / 2.0;
+                let tab_w = w / 3.0;
                 let tab_h = ROW_H * 1.15;
-                for (i, label) in ["Create", "Join"].iter().enumerate() {
-                    let on = (i == 1) == join_tab;
+                let current = if settings_tab { 2 } else if join_tab { 1 } else { 0 };
+                for (i, label) in ["Create", "Join", "Settings"].iter().enumerate() {
+                    let on = i == current;
                     let p0 = [origin[0] + tab_w * i as f32, origin[1]];
                     let p1 = [p0[0] + tab_w - 4.0, p0[1] + tab_h];
                     dl.add_rect(p0, p1, if on { TAB_ON } else { TAB_OFF }).filled(true).build();
                     ui.set_cursor_screen_pos(p0);
                     if ui.invisible_button(format!("tab{i}"), [tab_w - 4.0, tab_h]) {
-                        tab_click = Some(i == 1);
+                        tab_click = Some(i);
                     }
                     let _f = tab_font.map(|f| ui.push_font(f));
                     let ts = ui.calc_text_size(label);
@@ -169,7 +177,61 @@ impl ImguiRenderLoop for CoopMenu {
                     hover && ui.is_mouse_clicked(imgui::MouseButton::Left)
                 };
 
-                row_bg(y, 0, "Session name");
+                if settings_tab {
+                    // the mod's options; Tougher enemies works at once, the rest after the game restarts
+                    let mut o = crate::modsettings::get();
+                    let before = o;
+                    let toggle = |y: f32, idx: usize, label: &str, on: &mut bool| {
+                        if row_bg(y, idx, label) {
+                            *on = !*on;
+                        }
+                        let v = if *on { "<  On  >" } else { "<  Off  >" };
+                        let ts = ui.calc_text_size(v);
+                        dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], v);
+                    };
+                    toggle(y, 0, "Better car handling", &mut o.grip);
+                    y += ROW_H;
+                    toggle(y, 1, "Faster cars (200 km/h)", &mut o.fast);
+                    y += ROW_H;
+                    toggle(y, 2, "Longer gun range", &mut o.range);
+                    y += ROW_H;
+                    toggle(y, 3, "Tougher enemies", &mut o.tough);
+                    y += ROW_H;
+                    if row_bg(y, 4, "Graphics") {
+                        o.gfx = (o.gfx + 1) % 4;
+                    }
+                    let v = format!("<  {}  >", crate::modsettings::GFX[o.gfx as usize]);
+                    let ts = ui.calc_text_size(&v);
+                    dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &v);
+                    y += ROW_H;
+                    toggle(y, 5, "Latest NVIDIA DLSS", &mut o.dlss);
+                    y += ROW_H;
+                    if o != before {
+                        crate::modsettings::set(o);
+                    }
+                    row_bg(y, 6, "");
+                    {
+                        let _s = small_font.map(|f| ui.push_font(f));
+                        let note = if crate::modsettings::pending() {
+                            "Saved. Applied when you close the game; you'll see it next time you play."
+                        } else {
+                            "Tougher enemies changes at once. The rest applies after a game restart."
+                        };
+                        dl.add_text([origin[0] + 26.0, y + 20.0], [0.98, 0.90, 0.40, 1.0], note);
+                    }
+                    y += ROW_H;
+                    if o.dlss {
+                        row_bg(y, 7, "");
+                        let _s = small_font.map(|f| ui.push_font(f));
+                        dl.add_text([origin[0] + 26.0, y + 20.0], [0.85, 0.85, 0.90, 1.0], "Then turn DLSS on in the game's Graphics settings.");
+                        y += ROW_H;
+                    }
+                    if row_bg(y, 8, "Back") {
+                        close = true;
+                    }
+                    return;
+                }
+                row_bg(y, 0, if join_tab { "Session name or code" } else { "Session name" });
                 ui.set_cursor_screen_pos([field_x, y + (ROW_H - ui.frame_height()) / 2.0]);
                 ui.set_next_item_width(field_w);
                 ui.input_text("##name", name).build();
@@ -250,12 +312,9 @@ impl ImguiRenderLoop for CoopMenu {
                     dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &label);
                     y += ROW_H;
                 }
-                if !join_tab && row_bg(y, 9, "Test with a bot (no friend)") {
-                    // leave any session first, then host over UDP so the test bot can join
-                    crate::leave_session();
-                    if crate::coop_host() == 1 {
-                        crate::log_line("test host started for the bot");
-                    }
+                if !join_tab && row_bg(y, 9, "Host on my PC (short code)") {
+                    // no Steam: this PC is the server; the friend types the code and the same password
+                    host_pc = true;
                 }
                 if !join_tab {
                     y += ROW_H;
@@ -265,12 +324,25 @@ impl ImguiRenderLoop for CoopMenu {
                 }
             });
         if let Some(t) = tab_click {
-            self.join_tab = t;
+            self.join_tab = t == 1;
+            self.settings_tab = t == 2;
         }
         if go && !can {
             *SAVE_NOTE.lock().unwrap() = "Type a session name first.".into();
         }
-        if go && can {
+        if host_pc {
+            SAVE_NOTE.lock().unwrap().clear();
+            if crate::host_on_pc(self.pw.trim()) != 1 {
+                *SAVE_NOTE.lock().unwrap() = "Could not start: port 7790 is in use.".into();
+            }
+        }
+        // Join: a 7-symbol code (XXXX-XXX) joins a "host on my PC" session, anything else is a Steam session name
+        if go && can && self.join_tab && proto::parse_short_code(self.name.trim()).is_some() {
+            crate::log_line(&format!("ip: join {}", self.name.trim()));
+            if crate::join_code(self.name.trim(), self.pw.trim()) != 1 {
+                *SAVE_NOTE.lock().unwrap() = "That code did not work.".into();
+            }
+        } else if go && can {
             crate::leave_session();
             SAVE_NOTE.lock().unwrap().clear();
             crate::log_line(&format!("steam: {} \"{}\"", if self.join_tab { "join" } else { "create" }, self.name.trim()));

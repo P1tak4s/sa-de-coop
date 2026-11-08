@@ -6,6 +6,7 @@ mod ai;
 mod dialog;
 mod overlay;
 mod saves;
+mod modsettings;
 mod scripthook;
 mod steam;
 
@@ -219,6 +220,42 @@ pub unsafe extern "C" fn coop_code(out: *mut u8, max: i64) -> i64 {
 }
 
 /// F10: join with the code on the clipboard. 1 = joining, 0 = no valid code there.
+/// "Host on my PC" from the co-op menu: a UDP server here, the key from the password, a 7-symbol code with this
+/// PC's public IP (the LAN one until the router answers UPnP), copied to the clipboard.
+pub(crate) fn host_on_pc(pw: &str) -> i64 {
+    leave_session();
+    let Ok(sock) = UdpSocket::bind(("0.0.0.0", DEFAULT_PORT)) else {
+        log_line("host on PC: port 7790 is busy");
+        return 0;
+    };
+    shared().lock().unwrap().host = true;
+    let key = key_from_password(pw);
+    std::thread::spawn(move || relay::run_server(sock, key, Default::default()));
+    if let Some(ip) = relay::lan_ip() {
+        set_code(make_short_code(ip.octets()));
+    }
+    std::thread::spawn(move || {
+        if let Some(ip) = relay::upnp(DEFAULT_PORT) {
+            set_code(make_short_code(ip.octets()));
+        } else {
+            log_line("host on PC: the router did not open UDP 7790 (UPnP); a friend outside your network may not get in");
+        }
+    });
+    start_client(Session { server: SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)), key, nick: my_nick() })
+}
+
+/// Join a "host on my PC" session by its short code and the password.
+pub(crate) fn join_code(code: &str, pw: &str) -> i64 {
+    let Some(ip) = parse_short_code(code) else { return 0 };
+    leave_session();
+    start_client(Session { server: SocketAddr::from((ip, DEFAULT_PORT)), key: key_from_password(pw), nick: my_nick() })
+}
+
+/// The current code (host on my PC), if any.
+pub(crate) fn current_code() -> Option<String> {
+    shared().lock().unwrap().code.clone()
+}
+
 #[no_mangle]
 pub extern "C" fn coop_join_clipboard() -> i64 {
     let Ok(text) = clipboard_win::get_clipboard_string() else { return 0 };
@@ -614,6 +651,7 @@ pub(crate) fn leave_session() {
     s.status = 0;
     s.host = false;
     s.peers = Default::default();
+    s.code = None; // a "host on my PC" code must not show in a later Steam session
 }
 
 pub(crate) fn is_host() -> bool {
@@ -629,13 +667,15 @@ pub extern "C" fn coop_set_partner(handle: i64, near: i64) -> i64 {
     1
 }
 
-/// The host's session settings from the co-op menu: 0 = friendly fire (1 on), 1 = revive time in seconds.
+/// Settings from the co-op menu: 0 = friendly fire (1 on, the host's), 1 = revive time in seconds (the host's),
+/// 2 = tougher enemies (this PC's mod setting).
 #[no_mangle]
 pub extern "C" fn coop_setting(id: i64) -> i64 {
     use std::sync::atomic::Ordering::SeqCst;
     match id {
         0 => overlay::FRIENDLY_FIRE.load(SeqCst) as i64,
         1 => overlay::REVIVE_SECS.load(SeqCst) as i64,
+        2 => modsettings::get().tough as i64,
         _ => -1,
     }
 }

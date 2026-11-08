@@ -85,8 +85,10 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
 
 unsafe extern "C" fn can_start(ped: *mut u8) -> u8 {
     if connected() {
-        if !crate::is_host() {
-            return 0; // the guest plays the host's story, never its own
+        // the guest plays the host's story, never its own; but only while a host is really there (a session with
+        // nobody else in it, e.g. a stale test server, used to block every mission marker)
+        if !crate::is_host() && crate::coop_friends() > 0 {
+            return 0;
         }
         if PARTNER_PED.load(Ordering::Relaxed) > 0 && !PARTNER_NEAR.load(Ordering::Relaxed) {
             return 0; // the host waits in the marker until the partner is there too

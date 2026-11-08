@@ -147,8 +147,48 @@ pub fn parse_code(code: &str) -> Option<([u8; 4], u16, u32)> {
     Some((ip, (v >> 32) as u16, v as u32))
 }
 
+/// The short code for "host on my PC": only the public IPv4, 7 symbols ("K3M9-QX2"); port 7790, and the key comes
+/// from the session password (key_from_password), so nothing secret is in the code.
+pub fn make_short_code(ip: [u8; 4]) -> String {
+    let v = u32::from_be_bytes(ip) as u64;
+    let s: String = (0..7).rev().map(|i| ALPHABET[((v >> (i * 5)) & 31) as usize] as char).collect();
+    format!("{}-{}", &s[0..4], &s[4..7])
+}
+
+pub fn parse_short_code(code: &str) -> Option<[u8; 4]> {
+    let mut v: u64 = 0;
+    let mut n = 0;
+    for c in code.chars().filter(|c| !c.is_whitespace() && *c != '-') {
+        let c = match c.to_ascii_uppercase() { 'O' => '0', 'I' | 'L' => '1', c => c };
+        let d = ALPHABET.iter().position(|&a| a as char == c)? as u64;
+        v = v << 5 | d;
+        n += 1;
+    }
+    (n == 7 && v <= u32::MAX as u64).then(|| (v as u32).to_be_bytes())
+}
+
+/// The session key for "host on my PC", from the password both players type (FNV-1a, 32 bits).
+pub fn key_from_password(pw: &str) -> u32 {
+    let mut h: u32 = 0x811c9dc5;
+    for b in format!("sa-coop-ip:{pw}").bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    h
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn short_code_round_trip() {
+        for ip in [[85, 12, 34, 56], [255, 255, 255, 255], [0, 0, 0, 0], [192, 168, 1, 20]] {
+            let c = super::make_short_code(ip);
+            assert_eq!(c.len(), 8);
+            assert_eq!(super::parse_short_code(&c), Some(ip));
+        }
+        assert_eq!(super::parse_short_code("ABCD-EFGH"), None);
+    }
+
     use super::*;
 
     #[test]
