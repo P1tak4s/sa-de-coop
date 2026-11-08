@@ -107,20 +107,20 @@ function nameKey(slot, r) {
   return `COOPN${slot}`;
 }
 
-// world point -> the 640 x 448 screen the game's text uses; null when behind the camera or far away
+// world point -> the 640 x 448 screen the game's text uses, by the game's own CSprite::CalcScreenCoors
+// (RVA 0x1277370, Steam build 1.0.113.49697469); null when behind the camera or too far
+const CALC_SCREEN = Memory.Fn.X64U8(0x1277370, true);
+const SCREEN_W = 0x531B218, SCREEN_H = 0x531B21C;
+const projIn = Memory.Allocate(16), projOut = Memory.Allocate(16);
 function toScreen(p) {
-  const cam = Camera.GetActiveCoordinates(), at = Camera.GetActivePointAt();
-  let fx = at.x - cam.x, fy = at.y - cam.y, fz = at.z - cam.z;
-  const fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1; fx /= fl; fy /= fl; fz /= fl;
-  let rx = fy, ry = -fx; const rl = Math.sqrt(rx * rx + ry * ry) || 1; rx /= rl; ry /= rl; // right = forward x up
-  const ux = ry * fz, uy = -rx * fz, uz = rx * fy - ry * fx;                                 // up = right x forward
-  const dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
-  const depth = dx * fx + dy * fy + dz * fz;
-  if (depth < 1 || depth > 80) return null;
-  const tanX = Math.tan((Camera.GetFov() * Math.PI / 180) / 2), aspect = 16 / 9;
-  const sx = 320 + ((dx * rx + dy * ry) / depth / tanX) * 320;
-  const sy = 224 - ((dx * ux + dy * uy + dz * uz) / depth / (tanX / aspect)) * 224;
-  return sx < 0 || sx > 640 || sy < 0 || sy > 448 ? null : { x: sx, y: sy };
+  Memory.WriteFloat(projIn, p.x, false, false); Memory.WriteFloat(projIn + 4, p.y, false, false); Memory.WriteFloat(projIn + 8, p.z, false, false);
+  if (!CALC_SCREEN(projIn, projOut, 0, 0)) return null;
+  const depth = Memory.ReadFloat(projOut + 8, false, false);
+  if (depth > 80) return null;
+  const w = Memory.ReadI32(SCREEN_W, false, true), h = Memory.ReadI32(SCREEN_H, false, true);
+  if (w <= 0 || h <= 0) return null;
+  const sx = Memory.ReadFloat(projOut, false, false) * 640 / w, sy = Memory.ReadFloat(projOut + 4, false, false) * 448 / h;
+  return sx < 0 || sx > 640 || sy < 0 || sy > 448 ? null : { x: sx, y: sy - 8 }; // text is drawn from its top
 }
 
 function drawNames() {
