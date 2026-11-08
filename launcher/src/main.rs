@@ -15,8 +15,7 @@ fn main() -> eframe::Result {
         let log = match find_game() {
             Some(g) => {
                 let graphics = GRAPHICS.iter().position(|(n, _)| *n == current_graphics()).unwrap_or(2);
-                let (grip, fast) = cars_choice(&g);
-                let (ok, lines) = run_install(&g, graphics, grip || !installed(&g), fast);
+                let (ok, lines) = run_install(&g, graphics, load_opts(&g));
                 format!("ok={ok}
 {}
 ", lines.join("
@@ -140,7 +139,7 @@ fn install(game: &Path) -> Result<Vec<String>, String> {
 }
 
 // ---- car tuning: the game's own handling.cfg, retuned on this PC, packed as coopcars_P.pak ---------------------
-// Better handling: more grip, stronger brakes, a little more pull, less wobble.
+// Better handling: turns in quicker (more steering lock, less turn mass), more grip, stronger brakes, more pull, less wobble.
 // Faster cars: top speed at least 200 for road cars and motorbikes, with the pull to get there.
 // Both players should pick the same. The choice is remembered in %LOCALAPPDATA%\sa-de-coop\cars.txt.
 const HANDLING: &str = "Gameface/Content/OriginalData/GTASA/data/handling.cfg";
@@ -151,7 +150,7 @@ const NOT_FAST: [&str; 19] = [
     "FORKLIFT", "TRACTOR", "MOWER", "SWEEPER", "KART", "COMBINE", "TUG", "BAGGAGE",
 ];
 
-/// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: J traction (8), N top speed (12),
+/// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: C turn mass (2), J traction (8), N top speed (12),
 /// O engine acceleration (13), Q drive type (15), R engine type (16), S brake deceleration (17), b damping (22).
 fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::HashSet<String>) -> String {
     let t: Vec<&str> = line.split_whitespace().collect();
@@ -167,7 +166,9 @@ fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::
     let num = |out: &Vec<String>, i: usize| out[i].parse::<f32>().ok();
     let set = |out: &mut Vec<String>, i: usize, v: f32| out[i] = format!("{v:.3}");
     if grip {
-        for (i, k, max) in [(8, 1.12, 2.0), (13, 1.08, 100.0), (17, 1.25, 20.0), (22, 1.15, 1.0)] {
+        // 2 turn mass (lower = turns in quicker), 8 traction, 10 traction bias (towards the front: less understeer at
+        // speed), 13 acceleration, 17 brakes, 20 steering lock, 22 damping
+        for (i, k, max) in [(2, 0.7, 50000.0), (8, 1.12, 2.0), (10, 1.06, 0.65), (13, 1.15, 100.0), (17, 1.25, 20.0), (20, 1.2, 45.0), (22, 1.15, 1.0)] {
             if let Some(v) = num(&out, i) {
                 set(&mut out, i, (v * k).min(max));
             }
@@ -184,6 +185,30 @@ fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::
         }
     }
     out.join(" ")
+}
+
+/// The installer's gameplay choices. Both players should pick the same.
+#[derive(Clone, Copy)]
+struct Opts {
+    grip: bool,
+    fast: bool,
+    range: bool,
+    tough: bool,
+}
+
+fn save_opts(o: Opts) {
+    let _ = std::fs::create_dir_all(cars_file().parent().unwrap());
+    let _ = std::fs::write(
+        cars_file(),
+        format!("grip={}\nfast={}\nrange={}\ntough={}\n", o.grip as u8, o.fast as u8, o.range as u8, o.tough as u8),
+    );
+}
+
+/// Last installed choices; a fresh install gets better handling on and the rest off.
+fn load_opts(game: &Path) -> Opts {
+    let (grip, fast) = cars_choice(game);
+    let t = std::fs::read_to_string(cars_file()).unwrap_or_default();
+    Opts { grip: grip || !installed(game), fast, range: t.contains("range=1"), tough: t.contains("tough=1") }
 }
 
 fn cars_file() -> PathBuf {
@@ -203,8 +228,6 @@ fn cars_choice(game: &Path) -> (bool, bool) {
 fn set_car_handling(extra: &Path, gameface: &Path, grip: bool, fast: bool) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     let target = gameface.join(r"Content\Paks\~mods\coopcars_P.pak");
-    let _ = std::fs::create_dir_all(cars_file().parent().unwrap());
-    let _ = std::fs::write(cars_file(), format!("grip={}\nfast={}\n", grip as u8, fast as u8));
     if !grip && !fast {
         let _ = std::fs::remove_file(&target);
         return Ok("Cars: the game's own handling and speed.".into());
@@ -531,13 +554,78 @@ fn big_button(ui: &mut egui::Ui, text: &str, primary: bool) -> egui::Response {
     r
 }
 
+// ---- fights: longer gun range (weapon.dat -> coopweapons_P.pak) and tougher enemies (a CLEO script) ----------
+const WEAPONS: &str = "Gameface/Content/OriginalData/GTASA/data/weapon.dat";
+const RANGE_X: f32 = 1.6;
+
+/// Gun lines ("$ NAME INSTANT_HIT targetRange weaponRange ...") get both ranges x1.6; everything else unchanged.
+fn longer_range(line: &str) -> String {
+    let t: Vec<&str> = line.split_whitespace().collect();
+    if t.len() < 6 || t[0] != "$" || t[2] != "INSTANT_HIT" {
+        return line.to_string();
+    }
+    let mut out: Vec<String> = t.iter().map(|s| s.to_string()).collect();
+    for i in [3, 4] {
+        if let Ok(v) = out[i].parse::<f32>() {
+            out[i] = format!("{:.1}", (v * RANGE_X).min(250.0));
+        }
+    }
+    out.join("\t")
+}
+
+fn set_weapon_range(extra: &Path, gameface: &Path, on: bool) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    let target = gameface.join(r"Content\Paks\~mods\coopweapons_P.pak");
+    if !on {
+        let _ = std::fs::remove_file(&target);
+        return Ok("Guns: the game's own range.".into());
+    }
+    let repak = extra.join("repak.exe");
+    let pak = gameface.join(r"Content\Paks\pakchunk0-WindowsNoEditor.pak");
+    let o = std::process::Command::new(&repak).args(["get".as_ref(), pak.as_os_str(), WEAPONS.as_ref()])
+        .creation_flags(0x0800_0000).output().map_err(|e| e.to_string())?;
+    if !o.status.success() || o.stdout.len() < 2_000 {
+        return Err("could not read weapon.dat from the game".into());
+    }
+    let text = String::from_utf8_lossy(&o.stdout);
+    let tuned: Vec<String> = text.lines().map(longer_range).collect();
+    let tmp = std::env::temp_dir().join("sa-coop-weapons");
+    let _ = std::fs::remove_dir_all(&tmp);
+    let file = tmp.join("dst").join(WEAPONS);
+    std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&file, tuned.join("\r\n") + "\r\n").map_err(|e| e.to_string())?;
+    let out = tmp.join("coopweapons_P.pak");
+    let o = std::process::Command::new(&repak)
+        .args(["pack".as_ref(), "--version".as_ref(), "V11".as_ref(), "--mount-point".as_ref(), "../../../".as_ref(), tmp.join("dst").as_os_str(), out.as_os_str()])
+        .creation_flags(0x0800_0000).output().map_err(|e| e.to_string())?;
+    if !o.status.success() {
+        return Err(String::from_utf8_lossy(&o.stderr).trim().to_string());
+    }
+    std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::copy(&out, &target).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok("Longer gun range on. Restart the game to feel it.".into())
+}
+
+fn set_tough_enemies(extra: &Path, game: &Path, on: bool) -> String {
+    let dst = game.join(r"CLEO\tougher-enemies.js");
+    if !on {
+        let _ = std::fs::remove_file(&dst);
+        return "Enemies: the game's own.".into();
+    }
+    match std::fs::copy(extra.join(r"optional\tougher-enemies.js"), &dst) {
+        Ok(_) => "Tougher enemies on.".into(),
+        Err(e) => format!("Could not turn on tougher enemies: {e}"),
+    }
+}
+
 fn uninstall(game: &Path) -> Vec<String> {
     for f in ["version.dll", "cleo_redux64.asi", "coopnet64.asi", "ULTIMATE_ASI_LOADER_LICENSE.txt"] {
         let _ = std::fs::remove_file(game.join(f));
     }
     let _ = std::fs::remove_dir_all(game.join("CLEO"));
     if let Some(gf) = game.parent().and_then(|p| p.parent()) {
-        for f in ["coop_P.pak", "coopcars_P.pak"] {
+        for f in ["coop_P.pak", "coopcars_P.pak", "coopweapons_P.pak"] {
             let _ = std::fs::remove_file(gf.join(r"Content\Paks\~mods").join(f));
         }
     }
@@ -546,17 +634,23 @@ fn uninstall(game: &Path) -> Vec<String> {
 }
 
 /// Everything the Install button does; runs on its own thread so the window never freezes.
-fn run_install(game: &Path, graphics: usize, cars: bool, fast: bool) -> (bool, Vec<String>) {
+fn run_install(game: &Path, graphics: usize, o: Opts) -> (bool, Vec<String>) {
     let mut log = match install(game) {
         Ok(l) => l,
         Err(e) => return (false, vec![e]),
     };
     log.push(set_graphics(GRAPHICS[graphics].1));
     if let Some(gf) = game.parent().and_then(|p| p.parent()) {
-        match set_car_handling(&bundle_dir().with_file_name("extra"), gf, cars, fast) {
+        let extra = bundle_dir().with_file_name("extra");
+        match set_car_handling(&extra, gf, o.grip, o.fast) {
             Ok(m) | Err(m) => log.push(m),
         }
+        match set_weapon_range(&extra, gf, o.range) {
+            Ok(m) | Err(m) => log.push(m),
+        }
+        log.push(set_tough_enemies(&extra, game, o.tough));
     }
+    save_opts(o);
     (installed(game), log)
 }
 
@@ -566,8 +660,7 @@ struct App {
     game: Option<PathBuf>,
     path_text: String,
     graphics: usize, // index into GRAPHICS
-    cars: bool,
-    fast: bool,
+    opts: Opts,
     job: Option<Job>,
     result: Option<(bool, Vec<String>)>,
     art: (Option<egui::TextureHandle>, Option<egui::TextureHandle>),
@@ -581,16 +674,16 @@ impl App {
             "Off" | "your own" => 2,
             g => GRAPHICS.iter().position(|(n, _)| *n == g).unwrap_or(2),
         };
-        let (cars, fast) = game.as_deref().map(|g| { let (c, f) = cars_choice(g); (c || !installed(g), f) }).unwrap_or((true, false));
+        let opts = game.as_deref().map(load_opts).unwrap_or(Opts { grip: true, fast: false, range: false, tough: false });
         let art = steam_art(ctx, game.as_deref());
-        App { game, path_text: String::new(), graphics, cars, fast, job: None, result: None, art }
+        App { game, path_text: String::new(), graphics, opts, job: None, result: None, art }
     }
 
     fn start(&mut self, game: PathBuf) {
         let job: Job = Default::default();
-        let (j, g, c, f) = (job.clone(), self.graphics, self.cars, self.fast);
+        let (j, g, o) = (job.clone(), self.graphics, self.opts);
         std::thread::spawn(move || {
-            let r = run_install(&game, g, c, f);
+            let r = run_install(&game, g, o);
             *j.lock().unwrap() = Some(r);
         });
         self.result = None;
@@ -646,10 +739,14 @@ impl eframe::App for App {
                 // 2. options
                 card(ui, "OPTIONS", |ui| {
                     ui.add_enabled_ui(!busy, |ui| {
-                        ui.checkbox(&mut self.cars, "Better car handling");
+                        ui.checkbox(&mut self.opts.grip, "Better car handling");
                         ui.label(egui::RichText::new("Cars grip the road better and brake harder. Pick the same as your friend.").small().color(MUTED));
-                        ui.checkbox(&mut self.fast, "Faster cars");
+                        ui.checkbox(&mut self.opts.fast, "Faster cars");
                         ui.label(egui::RichText::new("Every car and motorbike can reach at least 200 km/h. Boats, planes and trains stay as they are.").small().color(MUTED));
+                        ui.checkbox(&mut self.opts.range, "Longer gun range");
+                        ui.label(egui::RichText::new("Guns reach and lock on 60% further, for you and for everyone else.").small().color(MUTED));
+                        ui.checkbox(&mut self.opts.tough, "Tougher enemies");
+                        ui.label(egui::RichText::new("Armed enemies aim better, shoot more often and take more hits.").small().color(MUTED));
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label("Graphics");

@@ -13,11 +13,13 @@ const friends = fn("coop_friends");
 const trackFn = fn("coop_track"), untrackFn = fn("coop_untrack"), takeTracked = fn("coop_take_tracked");
 {
   const out = Memory.Allocate(12);
+  let n = 0;
   while (takeTracked(2, out)) {
     const model = Memory.ReadI32(out + 4, false, false), h = Memory.ReadI32(out + 8, false, false);
-    try { if (Char.DoesExist(h) && new Char(h).getModel() === model) new Char(h).delete(); } catch (e) {}
+    try { if (Char.DoesExist(h) && new Char(h).getModel() === model) { new Char(h).delete(); n++; } } catch (e) {}
   }
   Memory.Free(out);
+  log(`[ai] removed ${n} remembered old partner(s)`);
 }
 const buf = Memory.Allocate(512);
 
@@ -25,7 +27,6 @@ const MODEL = 106;          // a Grove Street member
 const WEAPON = 30, AMMO = 600; // AK-47
 const ACTIONS = ["follow", "enter_car", "attack", "take_cover", "wait"];
 const SAY = { follow: "AI: following", enter_car: "AI: getting in", attack: "AI: attacking", take_cover: "AI: taking cover", wait: "AI: waiting" };
-const CLEANUP = 0x53DB410; // mission cleanup list (Steam build 1.0.113.49697469): peds of the current mission
 
 const player = new Player(0);
 let ped = null, blip = null, action = "follow", lastAsk = 0, lastSit = "", deadAt = 0, target = null;
@@ -43,13 +44,14 @@ function spawn(me) {
   Streaming.LoadAllModelsNow();
   for (let i = 0; i < 40 && !Streaming.HasModelLoaded(MODEL); i++) wait(25);
   const p = me.getCoordinates();
-  ped = Char.Create(8, MODEL, p.x + 1.5, p.y + 1.5, p.z);
-  try { trackFn(2, 2, MODEL, +ped); } catch (e) {}
+  // ped type 24 (mission 1): no built-in gang hatred. As a Grove ped (8) he shot every Ballas and Vagos in sight.
+  ped = Char.Create(24, MODEL, p.x + 1.5, p.y + 1.5, p.z);
+  // empty decision maker: no own reactions (as a mission-1 ped he put his hands up in a gunfight); our tasks drive him
+  try { ped.setDecisionMaker(DecisionMakerChar.Load(0)); } catch (e) { log(`[ai] decision maker: ${e}`); }
+  try { trackFn(2, 2, MODEL, +ped); log(`[ai] partner handle ${+ped} remembered`); } catch (e) { log(`[ai] track: ${e}`); }
   Streaming.MarkModelAsNoLongerNeeded(MODEL);
   try { ped.setHealth(200); } catch (e) {}
   try { ped.giveWeapon(WEAPON, AMMO); ped.setCurrentWeapon(WEAPON); } catch (e) {}
-  // hate the rival gangs and cops-free hostiles, so the game's own combat AI shoots them too
-  for (const t of RIVALS) try { ped.setRelationship(4, t); } catch (e) {}
   // not in the player's group: its AI would pull the partner out of the driver's seat (we follow by ourselves)
   try { blip = Blip.AddForChar(ped); blip.setAsFriendly(true); } catch (e) {}
   action = "follow";
@@ -62,40 +64,52 @@ function despawn() {
   ped = null; blip = null;
 }
 
-// rival gangs: Ballas 7, Vagos 9, Rifa 10, Da Nang 11, Mafia 12, Triads 13, Aztecas 14 (Grove 8 is ours)
-const RIVALS = [7, 9, 10, 11, 12, 13, 14];
-
-// mission peds that are alive and within 60 m, plus rival gang members within 35 m
-function enemies(me) {
-  const p = me.getCoordinates(), out = [], seen = new Set();
-  try {
-    let first = true;
-    for (let k = 0; k < 30; k++) {
-      const c = World.GetRandomCharInSphereNoSaveRecursive(p.x, p.y, p.z, 35, !first, true);
-      first = false;
-      if (!c || +c <= 0 || seen.has(+c)) break;
-      seen.add(+c);
-      if (ped && +c === +ped) continue;
-      if (!RIVALS.includes(c.getPedType()) || c.getHealth() <= 0) continue;
-      out.push({ c, dd: d2(p, c.getCoordinates()) });
+// People around a point: the game has no "all peds near me" call here, so ask for the first ped in each cell of a
+// 10 m grid (GET_RANDOM_CHAR_IN_AREA_OFFSET_NO_SAVE: does not take the ped over, unlike GET_RANDOM_CHAR_IN_SPHERE).
+function nearbyPeds(p, radius) {
+  const out = new Map(), step = 10, n = Math.ceil(radius / step);
+  for (let gx = -n; gx <= n; gx++) {
+    for (let gy = -n; gy <= n; gy++) {
+      if ((gx * gx + gy * gy) * step * step > radius * radius) continue;
+      try {
+        const c = World.GetRandomCharInAreaOffsetNoSave(p.x + gx * step, p.y + gy * step, p.z, step / 2 + 1, step / 2 + 1, 12);
+        if (c && +c > 0 && !out.has(+c) && Char.DoesExist(+c)) out.set(+c, c);
+      } catch (e) {}
     }
+  }
+  return [...out.values()];
+}
+
+// Only people who are actually fighting us: they hurt CJ or the partner, or fire a gun within 30 m. Remembered for
+// 20 s. Passers-by, rival gang members just walking around, and mission allies are never targets.
+const AGGRO_MS = 20000;
+const aggressors = new Map(); // handle -> last time seen fighting
+
+function enemies(me) {
+  const p = me.getCoordinates(), now = Date.now(), out = [];
+  try {
+    for (const c of nearbyPeds(p, 40)) {
+      if (me && +c === +me) continue;
+      if ((ped && +c === +ped) || c.getHealth() <= 0) continue;
+      try { if (c.isGroupMember(player.getGroup()) || c.getPedType() === 8) continue; } catch (e) {}
+      let fighting = false;
+      // they hurt CJ or the partner, or CJ is shooting them: help CJ in his fight
+      try { fighting = me.hasBeenDamagedByChar(c) || (ped && ped.hasBeenDamagedByChar(c)) || c.hasBeenDamagedByChar(me); } catch (e) {}
+      try { if (!fighting && c.isShooting() && d2(p, c.getCoordinates()) < 30 * 30) fighting = true; } catch (e) {}
+      if (fighting) aggressors.set(+c, now);
+    }
+    try { me.clearLastDamageEntity(); } catch (e) {}
+    // (the people CJ hit keep that record; they stay "fighting" for AGGRO_MS after the last time we saw it)
+    try { if (ped) ped.clearLastDamageEntity(); } catch (e) {}
   } catch (e) {}
-  for (let i = 0; i < 75; i++) {
-    const at = CLEANUP + i * 8;
-    if (Memory.ReadU8(at, false, true) !== 2) continue;
-    const h = Memory.ReadI32(at + 4, false, true);
+  for (const [h, t] of aggressors) {
     try {
-      if (!Char.DoesExist(h)) continue;
+      if (now - t > AGGRO_MS || !Char.DoesExist(h)) { aggressors.delete(h); continue; }
       const c = new Char(h);
-      if (ped && +c === +ped) continue;
-      if (seen.has(+c)) continue;
-      if (c.getHealth() <= 0) continue;
-      // mission peds include allies (Sweet, Ryder, Big Smoke): skip CJ's group and Grove Street (ped type 8)
-      try { if (c.isGroupMember(player.getGroup())) continue; } catch (e) {}
-      try { if (c.getPedType() === 8) continue; } catch (e) {}
+      if (c.getHealth() <= 0) { aggressors.delete(h); continue; }
       const dd = d2(p, c.getCoordinates());
       if (dd < 3600) out.push({ c, dd });
-    } catch (e) {}
+    } catch (e) { aggressors.delete(h); }
   }
   return out.sort((a, b) => a.dd - b.dd);
 }
@@ -149,7 +163,8 @@ function keepUp(me, now) {
       return;
     }
     if (ped.isInAnyCar()) { ped.warpFromCarToCoord(a.x + 2, a.y + 1, a.z); return; }
-    if (dd > 16) Task.GoStraightToCoord(ped, a.x, a.y, a.z, dd > 400 ? 7 : 6, 3000);
+    // sprint as soon as he falls a few metres behind, so he keeps up with a running CJ instead of warping
+    if (dd > 9) Task.GoStraightToCoord(ped, a.x, a.y, a.z, dd > 36 ? 7 : 6, 3000);
   } catch (e) { log(`[ai] keep up: ${e}`); }
 }
 
@@ -233,6 +248,20 @@ function drawTag() {
 }
 
 log("[ai] ready");
+// Second net for old partners the list above missed (older builds, a failed track): partner-looking peds around CJ
+// (our model, ped type 24, or type 8 from builds before 11-08 23:00) are removed once at start.
+try {
+  const me0 = player.getChar(), p0 = me0.getCoordinates();
+  let n = 0;
+  for (const c of nearbyPeds(p0, 150)) {
+    try {
+      if (c.getModel() !== MODEL || c.isGroupMember(player.getGroup())) continue;
+      const t = c.getPedType();
+      if (t === 24 || t === 8) { c.delete(); n++; }
+    } catch (e) {}
+  }
+  log(`[ai] swept ${n} leftover partner(s) nearby`);
+} catch (e) { log(`[ai] sweep: ${e}`); }
 // Down instead of dead, both ways, 30 s:
 //  - CJ down: the partner runs over and revives CJ (3 s next to him)
 //  - partner down: top banner "YOUR HOMIE IS DOWN", walk up to him and HOLD E for 3 s
@@ -261,10 +290,11 @@ function standUp(c, health) {
   c.setHealth(health);
 }
 
-let cjDown = false, cjDownAt = 0, reviveStart = 0;
+let cjDown = false, cjDownAt = 0, reviveStart = 0, cjWeapon = 0;
 function cjUp(me, health) {
   cjDown = false; reviveStart = 0;
-  try { player.setControl(true); } catch (e) {}
+  try { me.freezePosition(false); } catch (e) {}
+  try { if (cjWeapon) me.setCurrentWeapon(cjWeapon); } catch (e) {}
   standUp(me, health);
 }
 function handleDown(me) {
@@ -274,13 +304,16 @@ function handleDown(me) {
     if (h > 0 && h < DOWN_AT && !aiDown && ped.getHealth() > 0) {
       cjDown = true; cjDownAt = now; reviveStart = 0;
       if (me.isInAnyCar()) { try { const p = me.getCoordinates(); me.warpFromCarToCoord(p.x + 2, p.y, p.z); } catch (e) {} }
-      try { player.setControl(false); } catch (e) {}
+      // keep the controls (the mouse still turns the camera); hold CJ in place and without a gun instead
+      try { cjWeapon = me.getCurrentWeapon(); me.setCurrentWeapon(0); } catch (e) {}
+      try { me.freezePosition(true); } catch (e) {}
       knockDown(me);
       log("[ai] CJ down, partner coming");
     }
     return false;
   }
   banner("COOPAD1", (BLEED_OUT - (now - cjDownAt)) / 1000);
+  try { if (me.getCurrentWeapon() !== 0) me.setCurrentWeapon(0); if (!me.isPlayingAnim("KO_skid_back")) Task.PlayAnim(me, "KO_skid_back", "PED", 4.0, false, false, false, true, -1); } catch (e) {}
   if (now - cjDownAt > BLEED_OUT || ped.getHealth() <= 0) { cjUp(me, 0); return false; }
   const a = me.getCoordinates();
   if (d2(a, ped.getCoordinates()) > 2 * 2) {
@@ -306,6 +339,8 @@ function handlePartnerDown(me) {
     if (h > 0 && h < DOWN_AT) {
       aiDown = true; aiDownAt = now; holdStart = 0; chauffeur = null; action = "follow";
       if (ped.isInAnyCar()) { try { const p = ped.getCoordinates(); ped.warpFromCarToCoord(p.x + 2, p.y, p.z); } catch (e) {} }
+      // no gun while down: the game's own combat AI kept him standing and shooting
+      try { ped.removeAllWeapons(); } catch (e) {}
       knockDown(ped);
       log("[ai] partner down");
     }
@@ -313,6 +348,8 @@ function handlePartnerDown(me) {
   }
   const left = (BLEED_OUT - (now - aiDownAt)) / 1000;
   banner("COOPAD2", left);
+  // stay on the ground: if anything stood him up (combat AI, a bump), lay him down again
+  try { if (!ped.isPlayingAnim("KO_skid_back")) knockDown(ped); } catch (e) {}
   if (left <= 0) { aiDown = false; try { ped.setProofs(false, false, false, false, false); ped.setHealth(0); } catch (e) {} return false; }
   if (!cjDown && !me.isInAnyCar() && d2(me.getCoordinates(), ped.getCoordinates()) < 2.5 * 2.5) {
     if (Pad.IsKeyPressed(KEY_E)) {
@@ -322,6 +359,7 @@ function handlePartnerDown(me) {
       if (pct >= 100) {
         aiDown = false; holdStart = 0;
         standUp(ped, 120);
+        try { ped.giveWeapon(WEAPON, AMMO); ped.setCurrentWeapon(WEAPON); } catch (e) {}
         try { showTextBox("You revived the AI partner"); } catch (e) {}
         log("[ai] partner revived");
       }
@@ -357,9 +395,13 @@ while (true) {
     } catch (e) {}
     continue;
   }
-  // too far behind (e.g. CJ drove off alone): catch up next to CJ
-  // or a cutscene / interior change moved CJ: warp next to CJ (40 m, and into CJ's interior)
-  if (!me.isInAnyCar() && !ped.isInAnyCar() && d2(me.getCoordinates(), ped.getCoordinates()) > 40 * 40) {
+  // warp next to CJ only when running can't fix it: another interior (a cutscene or a door moved CJ), or more than
+  // 120 m behind and out of sight. While you can see him, he runs (he used to warp at 40 m, even mid-run).
+  let otherArea = false, seen = true;
+  try { otherArea = ped.getAreaVisible() !== Streaming.GetAreaVisible(); } catch (e) {}
+  try { const q = ped.getCoordinates(); q.z += 1.0; seen = toScreen(q) !== null; } catch (e) {}
+  const far = d2(me.getCoordinates(), ped.getCoordinates());
+  if (!me.isInAnyCar() && !ped.isInAnyCar() && (otherArea || (far > 120 * 120 && !seen) || far > 300 * 300)) {
     try {
       const p = me.getCoordinates();
       ped.setCoordinates(p.x + 1.5, p.y + 1.5, p.z);

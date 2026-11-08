@@ -629,6 +629,17 @@ pub extern "C" fn coop_set_partner(handle: i64, near: i64) -> i64 {
     1
 }
 
+/// The host's session settings from the co-op menu: 0 = friendly fire (1 on), 1 = revive time in seconds.
+#[no_mangle]
+pub extern "C" fn coop_setting(id: i64) -> i64 {
+    use std::sync::atomic::Ordering::SeqCst;
+    match id {
+        0 => overlay::FRIENDLY_FIRE.load(SeqCst) as i64,
+        1 => overlay::REVIVE_SECS.load(SeqCst) as i64,
+        _ => -1,
+    }
+}
+
 /// AI partner switch from the co-op menu: 1 = on.
 #[no_mangle]
 pub extern "C" fn coop_ai_enabled() -> i64 {

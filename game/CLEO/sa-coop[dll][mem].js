@@ -15,7 +15,7 @@ if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not fo
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -55,7 +55,11 @@ function untrack(ent) { try { api.coop_untrack(+ent); } catch (e) {} }
 }
 const SKINS = [105, 106, 107, 105]; // Grove Street looks until we sync clothes
 const DOWN_AT = 40;                 // health below this: down instead of dead (one AK hit would skip a lower mark)
-const BLEED_OUT = 30000;            // ms down before the game takes over
+// ---- session settings: the host picks them in the co-op menu, the script sends them to the others every 3 s ----
+const EVS_SET = 8, EV_PHIT = 9;
+const sess = { ff: false, revive: 30 };
+let lastSettingsAt = 0;
+function bleedOut() { return sess.revive * 1000; } // ms down before the game takes over
 const REVIVE_HOLD = 3000;           // hold E this long next to a downed friend
 const DOWN_ANIM = ["KO_skid_back", "PED"];
 // top-centre banner with a seconds countdown (~1~ is the number)
@@ -74,7 +78,7 @@ function banner(key, num, y) {
 
 const player = new Player(0);
 const remotes = [null, null, null, null];
-let downed = false, downedAt = 0;
+let downed = false, downedAt = 0, downWeapon = 0;
 
 // ---- small helpers ------------------------------------------------------------------------------------
 function say(text) { try { showTextBox(text); } catch (e) {} log(`[sa-coop] ${text}`); }
@@ -225,7 +229,9 @@ function goDown(me, now) {
   downed = true; downedAt = now;
   if (me.isInAnyCar()) { try { const p = me.getCoordinates(); me.warpFromCarToCoord(p.x + 2, p.y, p.z); } catch (e) {} }
   me.setProofs(true, true, true, true, true);
-  player.setControl(false);
+  // keep the controls (the mouse still turns the camera); hold CJ in place and without a gun instead
+  try { downWeapon = me.getCurrentWeapon(); me.setCurrentWeapon(0); } catch (e) {}
+  try { me.freezePosition(true); } catch (e) {}
   try { Task.PlayAnim(me, DOWN_ANIM[0], DOWN_ANIM[1], 4.0, false, false, false, true, -1); } catch (e) {}
   say("SA Co-op: you are down. A friend can revive you (30 s)");
 }
@@ -234,7 +240,8 @@ function getUp(me, health) {
   downed = false;
   try { me.clearTasksImmediately(); } catch (e) {}
   me.setProofs(false, false, false, false, false);
-  player.setControl(true);
+  try { me.freezePosition(false); } catch (e) {}
+  try { if (downWeapon) me.setCurrentWeapon(downWeapon); } catch (e) {}
   me.setHealth(health);
 }
 
@@ -243,9 +250,10 @@ function handleOwnHealth(me, now) {
     if (anyFriend() && me.getHealth() < DOWN_AT && me.getHealth() > 0) goDown(me, now);
     return;
   }
-  banner("COOPDN1", (BLEED_OUT - (now - downedAt)) / 1000);
+  banner("COOPDN1", (bleedOut() - (now - downedAt)) / 1000);
+  try { if (me.getCurrentWeapon() !== 0) me.setCurrentWeapon(0); if (!me.isPlayingAnim(DOWN_ANIM[0])) Task.PlayAnim(me, DOWN_ANIM[0], DOWN_ANIM[1], 4.0, false, false, false, true, -1); } catch (e) {}
   if (api.coop_take_revived()) { getUp(me, 60); say("SA Co-op: your friend revived you"); return; }
-  if (now - downedAt > BLEED_OUT || !anyFriend()) { getUp(me, 0); } // nobody came: the game's own death
+  if (now - downedAt > bleedOut() || !anyFriend()) { getUp(me, 0); } // nobody came: the game's own death
 }
 
 // ---- friends --------------------------------------------------------------------------------------------
@@ -429,7 +437,7 @@ function downRemote(r, s, slot, me) {
     try { Task.PlayAnim(r.ped, DOWN_ANIM[0], DOWN_ANIM[1], 4.0, false, false, false, true, -1); } catch (e) {}
     say("SA Co-op: your friend is down! Go over and hold E");
   }
-  const left = (BLEED_OUT - (Date.now() - (r.downAt || Date.now()))) / 1000;
+  const left = (bleedOut() - (Date.now() - (r.downAt || Date.now()))) / 1000;
   banner("COOPDN2", left);
   if (!downed && !me.isInAnyCar() && dist2(me.getCoordinates(), r.ped.getCoordinates()) < 2.5 * 2.5) {
     if (Pad.IsKeyPressed(KEY.E)) {
@@ -635,6 +643,10 @@ function hearWorld(me) {
     if (kind === EV.WEATHER) { const w = parseInt(text, 10); if (w >= 0 && w < 64) try { Weather.ForceNow(w); } catch (e) {} }
     else if (kind === EV.CUTSCENE) playCutscene(text, me);
     else if (kind === 4 || kind === 5) onMissionEvent(kind, text);
+    else if (kind === EVS_SET && !api.coop_is_host()) {
+      const m = /ff=(\d);rev=(\d+)/.exec(text);
+      if (m) { const ff = m[1] === "1", rev = Math.min(120, Math.max(10, parseInt(m[2], 10))); if (ff !== sess.ff) say(`SA Co-op: friendly fire ${ff ? "on" : "off"}`); sess.ff = ff; sess.revive = rev; }
+    } else if (kind === EV_PHIT) onFriendlyHit(me, text);
     else if (kind === 6 || kind === 7) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
@@ -781,6 +793,44 @@ function onMissionEvent(kind, text) {
       say(`SA Co-op: mission passed, you got $${earned}`);
     }
   }
+}
+
+// host: our menu choices are the session's; send them now and then (late joiners get them within 3 s)
+function settingsTick(now) {
+  if (!api.coop_is_host()) return;
+  sess.ff = api.coop_setting(0) === 1;
+  const rev = api.coop_setting(1);
+  if (rev >= 10) sess.revive = rev;
+  if (now - lastSettingsAt > 3000) { lastSettingsAt = now; sendEvent(EVS_SET, `ff=${sess.ff ? 1 : 0};rev=${sess.revive}`); }
+}
+
+// Friendly fire: off, your friend's copy here takes no damage. On, it takes bullets and punches from you only; the
+// damage goes to your friend's game (EV_PHIT), the copy is topped up again. Your friend goes down as usual.
+const COPY_HP = 1000;
+function friendlyFireTick(me) {
+  remotes.forEach((r, slot) => {
+    if (!r || !Char.DoesExist(r.ped)) return;
+    try {
+      if (r.ff !== sess.ff) {
+        r.ff = sess.ff;
+        if (sess.ff) { r.ped.setProofs(false, true, true, true, false); r.ped.setHealth(COPY_HP); }
+        else r.ped.setProofs(true, true, true, true, true);
+      }
+      if (!sess.ff || r.down) return;
+      const hp = r.ped.getHealth();
+      if (hp < COPY_HP - 1) {
+        if (r.ped.hasBeenDamagedByChar(me)) sendEvent(EV_PHIT, `${slot}:${Math.round(COPY_HP - hp)}`);
+        r.ped.clearLastDamageEntity();
+        r.ped.setHealth(COPY_HP);
+      }
+    } catch (e) {}
+  });
+}
+
+function onFriendlyHit(me, text) {
+  const [slot, dmg] = text.split(":").map((v) => parseInt(v, 10));
+  if (slot !== api.coop_slot() || downed || !(dmg > 0)) return;
+  try { me.setHealth(Math.max(1, me.getHealth() - Math.min(dmg, 200))); } catch (e) {} // 1, not 0: you go down, not die
 }
 
 // ---- catching up: J jumps to your friend (into a free seat, onto the trunk, or next to them) -------------------
@@ -972,6 +1022,8 @@ while (true) {
   handleOwnHealth(me, now);
   writeMine(me);
   syncRemotes(me, api.coop_slot(), now);
+  settingsTick(now);
+  friendlyFireTick(me);
   tellPartner(me);
   drawNames();
   const slotNow = api.coop_slot();

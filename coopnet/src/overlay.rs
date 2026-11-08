@@ -7,6 +7,9 @@ use hudhook::{ImguiRenderLoop, MessageFilter, RenderContext};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static OPEN: AtomicBool = AtomicBool::new(false);
+/// Session settings the host picks (sent to the others by the script): friendly fire, revive time in seconds.
+pub static FRIENDLY_FIRE: AtomicBool = AtomicBool::new(false);
+pub static REVIVE_SECS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(30);
 /// How the others see us: 0 = a Grove Street member, 1.. = a story character (SKINS in the script).
 pub static SKIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 /// The last message about save sets, shown in the status row.
@@ -29,7 +32,9 @@ pub struct CoopMenu {
 
 fn status_text() -> &'static str {
     match crate::status_code() {
-        1 => "Connecting through Steam...",
+        1 if crate::is_host() => "Creating your session on Steam...",
+        1 => "Looking for the session on Steam...",
+        2 if crate::is_host() => "Session ready! Your friend can join with the same name and password.",
         2 => "Connected! Load a save or go back to the game.",
         3 => "The server refused.",
         5 => "No such session. Check the name.",
@@ -107,7 +112,9 @@ impl ImguiRenderLoop for CoopMenu {
         // dim the game behind, like its own pause screen
         ui.get_background_draw_list().add_rect([0.0, 0.0], [dw, dh], [0.0, 0.0, 0.0, 0.62]).filled(true).build();
         // where the game's options panel sits: right of the menu list
-        let (x0, y0, w) = (dw * 0.30, dh * 0.33, dw * 0.62);
+        let (x0, w) = (dw * 0.30, dw * 0.62);
+        // as low as the game's options panel, but never past the bottom of the screen (12.6 rows tall)
+        let y0 = (dh * 0.33).min(dh - ROW_H * 12.6 - 16.0).max(8.0);
         let fonts = ui.fonts().fonts().to_vec();
         let (row_font, tab_font, small_font) =
             if self.fonts_ok && fonts.len() >= 3 { (Some(fonts[0]), Some(fonts[1]), Some(fonts[2])) } else { (None, None, None) };
@@ -115,14 +122,14 @@ impl ImguiRenderLoop for CoopMenu {
         let mut go = false;
         let mut tab_click: Option<bool> = None;
         let join_tab = self.join_tab;
-        let busy = matches!(crate::status_code(), 1 | 2);
-        let can = !busy && !self.name.trim().is_empty();
+        // a running session (also the bot test) no longer blocks Create / Join: pressing it starts over
+        let can = !self.name.trim().is_empty();
         let st = status_text();
         let name = &mut self.name;
         let pw = &mut self.pw;
         ui.window("##sacoop")
             .position([x0, y0], Condition::Always)
-            .size([w, ROW_H * 10.4], Condition::Always)
+            .size([w, ROW_H * 12.6], Condition::Always)
             .title_bar(false)
             .resizable(false)
             .movable(false)
@@ -225,7 +232,25 @@ impl ImguiRenderLoop for CoopMenu {
                     dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], label);
                     y += ROW_H;
                 }
-                if !join_tab && row_bg(y, 7, "Test with a bot (no friend)") {
+                if !join_tab {
+                    let ff = FRIENDLY_FIRE.load(Ordering::SeqCst);
+                    if row_bg(y, 7, "Friendly fire") {
+                        FRIENDLY_FIRE.store(!ff, Ordering::SeqCst);
+                    }
+                    let label = if ff { "<  On  >" } else { "<  Off  >" };
+                    let ts = ui.calc_text_size(label);
+                    dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], label);
+                    y += ROW_H;
+                    let secs = REVIVE_SECS.load(Ordering::SeqCst);
+                    if row_bg(y, 8, "Revive time") {
+                        REVIVE_SECS.store(if secs == 30 { 60 } else { 30 }, Ordering::SeqCst);
+                    }
+                    let label = format!("<  {secs} s  >");
+                    let ts = ui.calc_text_size(&label);
+                    dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &label);
+                    y += ROW_H;
+                }
+                if !join_tab && row_bg(y, 9, "Test with a bot (no friend)") {
                     // leave any session first, then host over UDP so the test bot can join
                     crate::leave_session();
                     if crate::coop_host() == 1 {
@@ -235,14 +260,20 @@ impl ImguiRenderLoop for CoopMenu {
                 if !join_tab {
                     y += ROW_H;
                 }
-                if row_bg(y, 8, "Back") {
+                if row_bg(y, 10, "Back") {
                     close = true;
                 }
             });
         if let Some(t) = tab_click {
             self.join_tab = t;
         }
+        if go && !can {
+            *SAVE_NOTE.lock().unwrap() = "Type a session name first.".into();
+        }
         if go && can {
+            crate::leave_session();
+            SAVE_NOTE.lock().unwrap().clear();
+            crate::log_line(&format!("steam: {} \"{}\"", if self.join_tab { "join" } else { "create" }, self.name.trim()));
             crate::start_steam_session(!self.join_tab, self.name.trim().to_string(), self.pw.clone());
         }
         // a session that just connected: back to the game, like Saints Row 2

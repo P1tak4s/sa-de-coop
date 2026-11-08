@@ -64,6 +64,8 @@ Your friend does the same on their PC. The full walkthrough is in [Install (step
 | **Better graphics** | Presets from Balanced to Ultra: higher render resolution, ambient occlusion, reflections, sharper and longer shadows. An optional ReShade look is included. |
 | **Better car handling** | Optional: more grip, stronger brakes, a bit more pull and less body roll, built from your own game files. |
 | **Faster cars** | Optional: every road car and motorbike can reach at least 200 km/h, with the pull to get there. Boats, planes, trains and bicycles stay as they are. |
+| **Harder fights** | Optional: guns reach 60% further, and armed enemies aim better, shoot more often and take more hits. |
+| **Session settings** | The host picks **friendly fire** (off or on) and the **revive time** (30 or 60 seconds) in the co-op menu; they apply to everyone in the session. |
 | **Safe for your saves** | Co-op saves live apart from your own story, with automatic backups. **Uninstall** removes everything the mod added. |
 
 **Not yet, or not tested:** full mission sync for two real players (shared enemies and money), your friend wearing
