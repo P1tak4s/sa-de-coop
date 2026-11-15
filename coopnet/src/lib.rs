@@ -434,6 +434,19 @@ impl SaveIn {
     }
 }
 
+/// Leave a parameterless command for the game's own thread (see scripthook). 1 = queued, 0 = not allowed or the
+/// game thread is not known yet.
+#[no_mangle]
+pub extern "C" fn coop_native(op: i64) -> i64 {
+    scripthook::queue_native(op as u32) as i64
+}
+
+/// How many queued commands the game thread has carried out so far.
+#[no_mangle]
+pub extern "C" fn coop_native_done() -> i64 {
+    scripthook::NATIVE_DONE.load(std::sync::atomic::Ordering::Relaxed) as i64
+}
+
 /// Why the game was just told "no mission now" (0 = it was not): 1 guest, 2 the host's partner is not near. Read once.
 #[no_mangle]
 pub extern "C" fn coop_take_refused() -> i64 {

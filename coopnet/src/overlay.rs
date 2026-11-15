@@ -506,6 +506,12 @@ unsafe extern "system" fn detour(this: *mut u8, func: *mut u8, parms: *mut u8) {
                     }
                 }
             } else if name == "InteractedButton" && !this.is_null() && !parms.is_null() {
+                // a menu event: this is the game thread (see scripthook: commands for the game's own thread)
+                if crate::scripthook::GAME_THREAD.load(Ordering::Relaxed) == 0 {
+                    let id = windows_sys::Win32::System::Threading::GetCurrentThreadId();
+                    crate::scripthook::GAME_THREAD.store(id, Ordering::Relaxed);
+                    crate::log_line(&format!("game thread: {id}"));
+                }
                 // the hovered/used entry's position in the visible list; co-op is always next to last (before exit)
                 let idx = *(parms as *const i32);
                 LAST_IDX = idx;

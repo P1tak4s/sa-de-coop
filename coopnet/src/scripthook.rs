@@ -41,6 +41,47 @@ pub static PARTNER_NEAR: AtomicBool = AtomicBool::new(false);
 pub static REFUSED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
+// ---- a few commands run on the game's own thread (11-15) ---------------------------------------------------------
+// CLEO runs its scripts on a thread of its own. A command that makes the game build something new there (a
+// cutscene's actors) crashes the Definitive Edition: "AssembleReferenceTokenStream ... called on a non-game thread".
+// The game's own scripts go through the same handler table on the game thread, so a script may leave a command
+// here and the next command the game itself runs carries it out. Only commands without parameters, from a short
+// list. The game thread is learned in the menu hook (the first menu event of the run).
+pub static GAME_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static NATIVE_QUEUE: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+pub static NATIVE_DONE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const NATIVE_ALLOWED: [u32; 2] = [0x02E7, 0x02EA]; // START_CUTSCENE, CLEAR_CUTSCENE
+
+pub fn queue_native(op: u32) -> bool {
+    if !NATIVE_ALLOWED.contains(&op) || GAME_THREAD.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    NATIVE_QUEUE.lock().unwrap().push(op);
+    true
+}
+
+unsafe fn run_native(s: *mut u8) {
+    let game = GAME_THREAD.load(Ordering::Relaxed);
+    if game == 0 || windows_sys::Win32::System::Threading::GetCurrentThreadId() != game {
+        return;
+    }
+    let op = {
+        let mut q = NATIVE_QUEUE.lock().unwrap();
+        if q.is_empty() {
+            return;
+        }
+        q.remove(0)
+    };
+    let h: Handler = std::mem::transmute(ORIG[(op / 100) as usize % 27]);
+    // these commands take no parameters: the running script's place in its code is not touched; its last answer
+    // (the compare flag) is put back in case the handler changed it
+    let cond = *s.add(S_COND);
+    h(s, op);
+    *s.add(S_COND) = cond;
+    NATIVE_DONE.fetch_add(1, Ordering::Relaxed);
+    crate::log_line(&format!("native: command {op:#06x} run on the game thread"));
+}
+
 type Handler = unsafe extern "C" fn(*mut u8, u32) -> u8;
 type CanStart = unsafe extern "C" fn(*mut u8) -> u8;
 static mut ORIG: [usize; 27] = [0; 27];
@@ -58,6 +99,7 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
     let logic = *(s.add(S_LOGIC) as *const u16);
     let not = *s.add(S_NOT);
     let r = f(s, op);
+    run_native(s);
     // ask again for the partner: host only, mission scripts only, plain (not NOT-ed) checks that said no
     let partner = PARTNER_PED.load(Ordering::Relaxed);
     if partner > 0

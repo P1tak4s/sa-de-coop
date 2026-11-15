@@ -15,7 +15,7 @@ if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not fo
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -735,21 +735,35 @@ function tellWorld(mySlot, now) {
 }
 
 // a friend's cutscene: play the same one here (only when we are free: on foot, not on our own mission)
-// text: name|interior|x|y|z. The game only draws the interior it is told to and only loads the map around the
-// player: without both, the friend's cutscene played in an empty sky (11-15). Ours are put back afterwards.
+// ---- a friend's cutscene, played here too ---------------------------------------------------------------------
+// text: name|interior|x|y|z. The cutscene is loaded from here, but started and cleared on the game's own thread
+// (coop_native): started from this script's thread it crashed the Definitive Edition whenever the game had to build
+// the cutscene's actors for the first time ("AssembleReferenceTokenStream for BP_player_character_Cutscene",
+// 11-15). A marker in an ini file guards it: if the game dies during a start, the next run only says that the
+// friend is watching one. The interior it plays in is shown; the game streams the place itself.
+const GUARD_INI = "sa-coop-guard.ini";
+let cutOff = false;
+try { cutOff = IniFile.ReadInt(GUARD_INI, "guard", "cutscene") === 1; if (cutOff) log("[sa-coop] cutscenes: the game died during one last time, off"); } catch (e) {}
+function nativeCall(op, timeoutMs) {
+  try {
+    const before = api.coop_native_done();
+    if (!api.coop_native(op)) return false;
+    for (let i = 0; i < timeoutMs / 25; i++) { wait(25); if (api.coop_native_done() !== before) return true; }
+  } catch (e) { log(`[sa-coop] native ${op}: ${e}`); }
+  return false;
+}
 function playCutscene(text, me) {
   const [name, a, x, y, z] = text.split("|");
   if (!/^[A-Za-z0-9_]{2,24}$/.test(name) || (ONMISSION && !isGuest()) || me.isInAnyCar() || downed) return;
+  if (cutOff) { say("SA Co-op: your friend is watching a cutscene"); return; }
   const area = Number(a), at = { x: Number(x), y: Number(y), z: Number(z) };
   const placed = area >= 0 && area <= 255 && [at.x, at.y, at.z].every(Number.isFinite) && Math.abs(at.x) < 6000 && Math.abs(at.y) < 6000;
   playingCut = true;
-  let myArea = 0, changed = false;
+  let myArea = 0, changed = false, started = false;
   try {
     if (placed) {
       myArea = Streaming.GetAreaVisible();
       Streaming.SetAreaVisible(area);
-      // only ask: LOAD_SCENE makes the game build the place on the script's thread, and the Definitive Edition
-      // crashes on that ("AssembleReferenceTokenStream for BP_ProceduralInteriorProp ... non-game thread", 11-15)
       Streaming.RequestCollision(at.x, at.y);
       changed = true;
     }
@@ -757,16 +771,21 @@ function playCutscene(text, me) {
     Cutscene.Load(name);
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) wait(25);
     if (Cutscene.HasLoaded()) {
-      Cutscene.Start();
-      // the map around where the cutscene's camera really is (the sender's player may stand somewhere else)
-      wait(100);
-      try {
-        const c = Camera.GetActiveCoordinates();
-        if (!Cutscene.HasFinished() && Math.abs(c.x) < 6000 && Math.abs(c.y) < 6000) Streaming.RequestCollision(c.x, c.y);
-      } catch (e) { log(`[sa-coop] cutscene ${name}, scene: ${e}`); }
-      while (!Cutscene.HasFinished()) wait(0);
+      try { IniFile.WriteInt(1, GUARD_INI, "guard", "cutscene"); } catch (e) {}
+      started = nativeCall(0x02E7, 2000);
+      if (started) {
+        const from = Date.now();
+        let cleared = false;
+        while (!Cutscene.HasFinished()) {
+          wait(0);
+          // it has been running for 3 s: the start did not kill the game
+          if (!cleared && Date.now() - from > 3000) { cleared = true; try { IniFile.WriteInt(0, GUARD_INI, "guard", "cutscene"); } catch (e) {} }
+        }
+        log(`[sa-coop] cutscene ${name} played`);
+      } else log(`[sa-coop] cutscene ${name}: the game's own thread did not take the start, not shown`);
+      try { IniFile.WriteInt(0, GUARD_INI, "guard", "cutscene"); } catch (e) {}
     }
-    Cutscene.Clear();
+    if (!nativeCall(0x02EA, 2000)) Cutscene.Clear();
   } catch (e) { log(`[sa-coop] cutscene ${name}: ${e}`); }
   if (changed) {
     try {
@@ -775,6 +794,7 @@ function playCutscene(text, me) {
       Streaming.RequestCollision(p.x, p.y);
     } catch (e) { log(`[sa-coop] cutscene ${name}, back: ${e}`); }
   }
+  if (!started) say("SA Co-op: your friend is watching a cutscene");
   playingCut = false;
 }
 
@@ -862,11 +882,7 @@ function hearWorld(me) {
   while ((kind = api.coop_event_poll(evBuf)) > 0) {
     const text = readStr(evBuf, 127, false);
     if (kind === EV.WEATHER) { const w = parseInt(text, 10); if (w >= 0 && w < 64) try { Weather.ForceNow(w); } catch (e) {} }
-    // A friend's cutscene is no longer played here. The game builds a cutscene's actors on the thread that starts
-    // it, and from a script that crashes the Definitive Edition whenever this game has not made them before
-    // ("AssembleReferenceTokenStream for BP_player_character_Cutscene", and BP_ProceduralInteriorProp before it,
-    // 11-15). playCutscene stays for the day it can be started on the game's own thread.
-    else if (kind === EV.CUTSCENE) say("SA Co-op: your friend is watching a cutscene");
+    else if (kind === EV.CUTSCENE) playCutscene(text, me);
     else if (kind === 4 || kind === 5) onMissionEvent(kind, text);
     else if (kind === EVS_SET && !api.coop_is_host()) {
       const m = /ff=(\d);rev=(\d+)/.exec(text);
@@ -1631,7 +1647,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.10", EV_VERSION = 21;
+const VERSION = "0.8.11", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
