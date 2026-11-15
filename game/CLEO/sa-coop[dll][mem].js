@@ -907,7 +907,7 @@ function tryRideAlong(me) {
 const RVA = { cutName: 0x51AFC68, cutRunning: 0x572A430, onMission: 0x521C91C, scriptSpace: 0x51BEAE0,
               activeScripts: 0x5211718, newWeather: 0x5300FEC, forcedWeather: 0x5301008 };
 const EV = { WEATHER: 1, CUTSCENE: 2, MISSION: 3 };
-let lastWeatherSent = -1, lastWeatherAt = 0, cutWas = false, cutNameWas = "", friendsWas = 0, missionSentAt = 0, missionWas = "", playingCut = false;
+let lastWeatherSent = -1, lastWeatherAt = 0, cutWas = false, cutNameWas = "", cutLoadSent = "", friendsWas = 0, missionSentAt = 0, missionWas = "", playingCut = false;
 
 function readStr(addr, n, ib) {
   let s = "";
@@ -958,6 +958,12 @@ function tellWorld(mySlot, now) {
     try { skipped = Cutscene.WasSkipped() ? 1 : 0; } catch (e) {}
     sendEvent(EV_CUTEND, String(skipped));
   }
+  // Loading starts some seconds before the cutscene does: the friends load it at the same time (as CoopAndreas
+  // sends LOAD_CUTSCENE as soon as the host runs it), so theirs can start with ours instead of seconds later.
+  if (!running && !isGuest()) {
+    const loading = readStr(RVA.cutName, 24, true);
+    if (loading && loading !== cutLoadSent && /^[A-Za-z0-9_]{2,24}$/.test(loading)) { cutLoadSent = loading; sendEvent(EV_CUTLOAD, loading); }
+  } else if (running) cutLoadSent = cutName;
   cutWas = running; cutNameWas = cutName;
   const m = missionName();
   // said when it changes, and again every 5 s and when a friend joins: an event sent before they were there is lost
@@ -1031,7 +1037,8 @@ function playCutscene(text, me) {
     const table = known || name.replace(/[a-z]$/i, "");
     loadFriendText(table, true);
     err(`[sa-coop] cutscene ${name}: text table ${table} (mission ${friendMission || "-"}, last ${lastFriendMission || "-"}, loaded ${textTable || "-"}, off ${textOff ? 1 : 0})`);
-    Cutscene.Load(name);
+    if (preloaded.toLowerCase() !== name.toLowerCase()) Cutscene.Load(name); // loaded with the host already: not again
+    preloaded = "";
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) pause(25);
     // theirs is over or the next one has begun while ours was still loading: not started at all
     const early = pollCut();
@@ -1178,7 +1185,18 @@ function keyHints(me) {
 // The host says when its cutscene ends and whether it was skipped. A skipped one ends in the guest's game at once;
 // one that ran to its end lets the guest's copy run to its end too (it started a moment later). The guest skipping
 // its copy tells the host, who is asked to skip too. Events that come in while a cutscene plays wait in `deferred`.
-const EV_CUTEND = 28, EV_SAY = 29, EV_CUTSKIP = 30;
+const EV_CUTEND = 28, EV_SAY = 29, EV_CUTSKIP = 30, EV_CUTLOAD = 33;
+// guest: the host is loading this cutscene; ours is loaded now, so it starts at once when theirs does
+let preloaded = "";
+function onCutLoad(text, me) {
+  if (!isGuest() || playingCut || cutOff || downed || !/^[A-Za-z0-9_]{2,24}$/.test(text) || text === preloaded) return;
+  try {
+    loadFriendText(friendMission && friendMission !== "noname" ? friendMission : text.replace(/[a-z]$/i, ""), true);
+    Cutscene.Load(text);
+    preloaded = text;
+    logx(`[sa-coop] cutscene ${text}: loading with the host`);
+  } catch (e) { err(`[sa-coop] cutscene preload ${text}: ${e}`); }
+}
 const deferred = [];
 let eventText = "";
 function nextEvent() {
@@ -1325,6 +1343,7 @@ function hearWorld(me) {
     else if (kind === EV_SAY) say(text.replace(/`/g, " "));
     else if (kind === EV_SKIPREQ) onSkipRequest();
     else if (kind === EV_CAM) onCam(text, me);
+    else if (kind === EV_CUTLOAD) onCutLoad(text, me);
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION) onFriendMission(text, me);
@@ -1442,6 +1461,22 @@ function mirrorMissionEntities(now) {
         if (dead || !(kind === 2 ? model > 0 && model < 312 : model >= 400 && model <= 611)) continue;
         // story characters (Sweet, Ryder: models 290..299) cannot be loaded by a script: a Grove Street member
         // stands in for them, or the guest saw nobody at all (11-15: "he does not see Sweet")
+        // The host's own car may already stand here as the friend's car we show (the host drove it before the mission
+        // listed it, 11-15 19:08: "friend's car 466 created", then the same car again from the mission list). That
+        // copy becomes the mission car's copy too; it goes on being moved by the host's driving.
+        if (kind === 1) {
+          let twin = null;
+          for (const r of remotes) {
+            if (!r || !r.car || r.borrowedProxy) continue;
+            try { if (Car.DoesExist(r.car) && r.car.getModel() === safeCarModel(model) && dist2(r.car.getCoordinates(), { x, y, z }) < 10 * 10) { twin = r; break; } } catch (e) {}
+          }
+          if (twin) {
+            proxies.set(h, { kind, ent: twin.car, model, blip: null, setHp: hp });
+            twin.borrowed = true; twin.borrowedProxy = h;
+            logx(`[sa-coop] mission car ${h} is the car the friend already drives here: one car`);
+            continue;
+          }
+        }
         const kept = kind === 1 ? keptCopies.get(h) : null;
         keptCopies.delete(h);
         if (kept && Car.DoesExist(kept)) {
@@ -2338,7 +2373,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.31", EV_VERSION = 21;
+const VERSION = "0.9.32", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
