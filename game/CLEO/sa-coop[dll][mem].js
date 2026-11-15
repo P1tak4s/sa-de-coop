@@ -1337,7 +1337,18 @@ function dropProxy(h) {
   if (!p) return;
   try { if (p.blip) p.blip.remove(); } catch (e) {}
   untrack(p.ent);
-  try { if (p.kind === 2 && Char.DoesExist(p.ent)) p.ent.delete(); if (p.kind === 1 && Car.DoesExist(p.ent)) p.ent.delete(); } catch (e) {}
+  try {
+    if (p.kind === 2 && Char.DoesExist(p.ent)) p.ent.delete();
+    if (p.kind === 1 && Car.DoesExist(p.ent)) {
+      // never from under a player: the car we (or a friend's copy) sit in stays, as an ordinary car of our game
+      // (11-15: "when my friend drives and hits a car, it disappears")
+      const me = player.getChar();
+      let used = me.isInAnyCar() && +me.storeCarIsInNoSave() === +p.ent;
+      for (const r of remotes) if (r && r.car && +r.car === +p.ent) { used = true; r.borrowed = false; r.borrowedProxy = 0; }
+      if (used) { p.ent.markAsNoLongerNeeded(); logx(`[sa-coop] mission car copy ${h} gone in the friend's game: kept, a player sits in it`); }
+      else p.ent.delete();
+    }
+  } catch (e) {}
   proxies.delete(h);
 }
 
@@ -2250,7 +2261,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.21", EV_VERSION = 21;
+const VERSION = "0.9.22", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
