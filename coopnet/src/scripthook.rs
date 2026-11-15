@@ -280,7 +280,17 @@ unsafe extern "C" fn can_start(ped: *mut u8) -> u8 {
             REFUSED.store(1, Ordering::Relaxed);
             return 0;
         }
-        // The host starts its missions whenever it likes. It used to wait in the marker until the partner stood
+        // 11-15, asked for after all: a story mission starts only with both players at its marker (the partner within
+        // 25 m, told by the script). The script says so to both, so it no longer reads as "it will not let me in".
+        if crate::is_host()
+            && crate::coop_friends() > 0
+            && STORY_CHECK.load(Ordering::Relaxed) == 1
+            && !PARTNER_NEAR.load(Ordering::Relaxed)
+        {
+            REFUSED.store(2, Ordering::Relaxed);
+            return 0;
+        }
+        // Before that: the host started its missions whenever it liked. It used to wait in the marker until the partner stood
         // next to it; in the first real sessions that only read as "it will not let me in" (11-15, eight refusals
         // in a row in the log). A partner who is far away is offered the jump (J) by the script instead.
     }

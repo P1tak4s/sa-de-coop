@@ -1,6 +1,6 @@
 [package]
 name = "sa-coop"
-version = "0.9.12"
+version = "0.9.13"
 edition = "2021"
 description = "SA Co-op installer"
 license = "MIT"

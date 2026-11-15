@@ -920,6 +920,11 @@ function tellWorld(mySlot, now) {
     try { const o = Cutscene.GetOffset(); if (o && (o.xOffset || o.yOffset)) p = { x: o.xOffset, y: o.yOffset, z: o.zOffset }; } catch (e) {}
     sendEvent(EV.CUTSCENE, `${readStr(RVA.cutName, 24, true)}|${area}|${Math.round(p.x)}|${Math.round(p.y)}|${Math.round(p.z)}`);
   }
+  if (!running && cutWas && !playingCut) {
+    let skipped = 0;
+    try { skipped = Cutscene.WasSkipped() ? 1 : 0; } catch (e) {}
+    sendEvent(EV_CUTEND, String(skipped));
+  }
   cutWas = running; cutNameWas = cutName;
   const m = missionName();
   if (m !== missionWas) { missionWas = m; sendEvent(EV.MISSION, m); }
@@ -991,18 +996,29 @@ function playCutscene(text, me) {
     err(`[sa-coop] cutscene ${name}: text table ${table} (mission ${friendMission || "-"}, last ${lastFriendMission || "-"}, loaded ${textTable || "-"}, off ${textOff ? 1 : 0})`);
     Cutscene.Load(name);
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) pause(25);
-    if (Cutscene.HasLoaded()) {
+    // theirs is over or the next one has begun while ours was still loading: not started at all
+    const early = pollCut();
+    if (Cutscene.HasLoaded() && (early.ended || early.next)) { started = true; log(`[sa-coop] cutscene ${name}: over in the friend's game before it loaded here`); }
+    else if (Cutscene.HasLoaded()) {
       try { flag(1, "cutscene"); } catch (e) {}
       started = nativeCall(0x02E7, 2000);
       if (started) {
         const from = Date.now();
-        let cleared = false;
+        let cleared = false, theirsEnded = false, cut = false, polledAt = 0;
         while (!Cutscene.HasFinished()) {
           pause(0);
           // it has been running for 3 s: the start did not kill the game
           if (!cleared && Date.now() - from > 3000) { cleared = true; try { flag(2, "cutscene"); } catch (e) {} }
+          if (Date.now() - polledAt > 150) {
+            polledAt = Date.now();
+            const sig = pollCut();
+            if (sig.ended) theirsEnded = true;
+            if (sig.skip || sig.next) { cut = true; break; } // skipped there, or the next one began: ours ends now
+          }
         }
-        log(`[sa-coop] cutscene ${name} played`);
+        // we skipped ours while theirs still runs: tell them
+        if (!cut && !theirsEnded) { try { if (Cutscene.WasSkipped()) sendEvent(EV_CUTSKIP, "1"); } catch (e) {} }
+        log(`[sa-coop] cutscene ${name} ${cut ? "ended with the friend's" : "played"}`);
       } else log(`[sa-coop] cutscene ${name}: the game's own thread did not take the start, not shown`);
       try { flag(2, "cutscene"); } catch (e) {}
     }
@@ -1117,10 +1133,36 @@ function keyHints(me) {
   } catch (e) {}
 }
 
-function hearWorld(me) {
+// ---- cutscenes together (11-15: "if one stops it, it must stop for the other; skip together") --------------------
+// The host says when its cutscene ends and whether it was skipped. A skipped one ends in the guest's game at once;
+// one that ran to its end lets the guest's copy run to its end too (it started a moment later). The guest skipping
+// its copy tells the host, who is asked to skip too. Events that come in while a cutscene plays wait in `deferred`.
+const EV_CUTEND = 28, EV_SAY = 29, EV_CUTSKIP = 30;
+const deferred = [];
+let eventText = "";
+function nextEvent() {
+  if (deferred.length) { const d = deferred.shift(); eventText = d.text; return d.kind; }
+  const kind = api.coop_event_poll(evBuf);
+  if (kind > 0) eventText = readStr(evBuf, 127, false);
+  return kind;
+}
+// while our copy of a friend's cutscene plays: has theirs ended, was it skipped, has the next one started?
+function pollCut() {
+  const out = { ended: false, skip: false, next: false };
   let kind;
   while ((kind = api.coop_event_poll(evBuf)) > 0) {
     const text = readStr(evBuf, 127, false);
+    if (kind === EV_CUTEND) { out.ended = true; if (text === "1") out.skip = true; }
+    else { if (kind === EV.CUTSCENE) out.next = true; if (deferred.length < 600) deferred.push({ kind, text }); }
+  }
+  return out;
+}
+function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
+
+function hearWorld(me) {
+  let kind;
+  while ((kind = nextEvent()) > 0) {
+    const text = eventText;
     if (kind === EV.WEATHER) { const w = parseInt(text, 10); if (w >= 0 && w < 64) try { Weather.ForceNow(w); } catch (e) {} }
     else if (kind === EV.CUTSCENE) playCutscene(text, me);
     else if (kind === 4 || kind === 5) onMissionEvent(kind, text);
@@ -1138,6 +1180,8 @@ function hearWorld(me) {
     else if (kind === EV_GUNS) onGuns(text);
     else if (kind === EV_TAG) onTag(text);
     else if (kind === EV_ICONS) onIcons(text);
+    else if (kind === EV_SAY) say(text.replace(/`/g, " "));
+    else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, text && text !== "noname" && (lastFriendMission = text), true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
   }
@@ -1629,6 +1673,28 @@ function onIcons(text) {
   log(`[sa-coop] the host's mission icons: ${guestIcons.length} added`);
 }
 
+// ---- a friend on the map: an icon of the game's own (CJ's head; a car while they drive) instead of the plain
+// square, written into the friend's entry in the game's radar list. The game draws only its own icon set.
+const FRIEND_ICON = 15, FRIEND_CAR_ICON = 55;
+let blipIconAt = 0;
+function blipIconTick(now) {
+  if (now - blipIconAt < 1000) return;
+  blipIconAt = now;
+  try {
+    for (const r of remotes) {
+      if (!r || !r.blip || !Char.DoesExist(r.ped)) continue;
+      const want = r.car ? FRIEND_CAR_ICON : FRIEND_ICON;
+      for (let i = 0; i < 250; i++) {
+        const e = SRVA.radar + i * 0x30;
+        if (!(Memory.ReadU8(e + 0x29, false, true) & 2)) continue;
+        if (((Memory.ReadU8(e + 0x2A, false, true) >> 2) & 15) !== 2 || Memory.ReadI32(e + 4, false, true) !== +r.ped) continue;
+        if (Memory.ReadU8(e + 0x28, false, true) !== want) Memory.WriteU8(e + 0x28, want, false, true);
+        break;
+      }
+    }
+  } catch (e) { err(`[sa-coop] map icon: ${e}`); }
+}
+
 function onStoryEvent(kind, text) {
   if (!isGuest()) return;
   if (kind === EVS.WORDS) {
@@ -2086,7 +2152,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.12", EV_VERSION = 21;
+const VERSION = "0.9.13", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2251,7 +2317,11 @@ function refusedTick(t) {
   try { why = api.coop_take_refused(); } catch (e) {}
   if (!why || t - refusedAt < 8000) return;
   refusedAt = t;
-  if (why === 2) return; // older DLL only: the host is no longer held back
+  if (why === 2) { // the host: a story mission starts only with both players at its marker
+    say("SA Co-op: both of you must be at the marker to start a mission");
+    sayToFriends("SA Co-op: both of you must be at the marker to start a mission");
+    return;
+  }
   say(`SA Co-op: you play your friend's story, not your own. ${hostSaveNote || "Load the host's save: Esc, Load Game"}`);
 }
 
@@ -2318,6 +2388,7 @@ while (true) {
   keyHints(me);
   missionsTick(now);
   iconsTick(now);
+  blipIconTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
   catchUpTick(me, now);
   // F in a friend's car: straight out beside it (the car is moved every frame, which breaks the exit animation)
