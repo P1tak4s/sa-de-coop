@@ -1048,7 +1048,7 @@ function onFriendlyHit(me, text) {
 // A mission runs in one game; the other player left far behind is no help and can strand the story. During a
 // mission, more than 200 m away for 8 s, a banner offers J. J works any time.
 let friendMission = "", farSince = 0;
-const KEY_J = 74, FAR = 200;
+const KEY_J = 74, FAR = 60; // further than this during a mission: the jump (J) is offered
 try { FxtStore.insert("COOPFAR", "Your homie is far away. Press J to jump to them"); } catch (e) {}
 
 function nearestFriend(me) {
@@ -1092,7 +1092,7 @@ function catchUpTick(me, now) {
   const f = mission ? nearestFriend(me) : null;
   if (!f || f.d < FAR || downed) { farSince = 0; return; }
   if (!farSince) farSince = now;
-  if (now - farSince > 8000) {
+  if (now - farSince > 3000) {
     try {
       Text.UseCommands(true); Text.SetFont(1); Text.SetScale(0.45, 1.8); Text.SetCenter(true);
       Text.SetColor(255, 200, 80, 255); Text.SetDropshadow(2, 0, 0, 0, 255);
@@ -1584,8 +1584,8 @@ function refusedTick(t) {
   try { why = api.coop_take_refused(); } catch (e) {}
   if (!why || t - refusedAt < 8000) return;
   refusedAt = t;
-  if (why === 2) say("SA Co-op: your friend must be next to you to start a mission");
-  else say(`SA Co-op: you play your friend's story, not your own. ${hostSaveNote || "Load the host's save: Esc, Load Game"}`);
+  if (why === 2) return; // older DLL only: the host is no longer held back
+  say(`SA Co-op: you play your friend's story, not your own. ${hostSaveNote || "Load the host's save: Esc, Load Game"}`);
 }
 
 function sharedWorldTick(me, t) {

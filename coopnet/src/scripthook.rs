@@ -94,10 +94,9 @@ unsafe extern "C" fn can_start(ped: *mut u8) -> u8 {
             REFUSED.store(1, Ordering::Relaxed);
             return 0;
         }
-        if crate::is_host() && PARTNER_PED.load(Ordering::Relaxed) > 0 && !PARTNER_NEAR.load(Ordering::Relaxed) {
-            REFUSED.store(2, Ordering::Relaxed);
-            return 0; // the host waits in the marker until the partner is there too
-        }
+        // The host starts its missions whenever it likes. It used to wait in the marker until the partner stood
+        // next to it; in the first real sessions that only read as "it will not let me in" (11-15, eight refusals
+        // in a row in the log). A partner who is far away is offered the jump (J) by the script instead.
     }
     match ORIG_CAN_START {
         Some(f) => f(ped),
