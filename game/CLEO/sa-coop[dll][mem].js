@@ -15,7 +15,7 @@ if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not fo
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -869,7 +869,10 @@ function ownMissionEntities() {
       if (kind === 2) {
         if (!Char.DoesExist(h)) continue;
         const c = new Char(h), p = c.getCoordinates(), hp = c.getHealth();
-        out.push({ h, kind, dead: hp <= 0 ? 1 : 0, model: c.getModel(), x: p.x, y: p.y, z: p.z, heading: c.getHeading(), hp });
+        // the "dead" byte also carries the weapon (bits 1..6) and "is shooting" (bit 7)
+        let extra = 0;
+        try { extra = (Math.min(46, Math.max(0, c.getCurrentWeapon())) << 1) | (c.isShooting() ? 0x80 : 0); } catch (e) {}
+        out.push({ h, kind, dead: (hp <= 0 ? 1 : 0) | extra, model: c.getModel(), x: p.x, y: p.y, z: p.z, heading: c.getHeading(), hp });
       } else {
         if (!Car.DoesExist(h)) continue;
         const c = new Car(h), p = c.getCoordinates(), hp = c.getHealth();
@@ -913,7 +916,8 @@ function mirrorMissionEntities(now) {
   const seen = new Set();
   for (let i = 0; i < n; i++) {
     const b = entBuf + i * ENT_SIZE;
-    const h = Memory.ReadI32(b, false, false), kind = Memory.ReadU8(b + 4, false, false), dead = Memory.ReadU8(b + 5, false, false);
+    const h = Memory.ReadI32(b, false, false), kind = Memory.ReadU8(b + 4, false, false), deadByte = Memory.ReadU8(b + 5, false, false);
+    const dead = deadByte & 1, weapon = (deadByte >> 1) & 0x3f, shooting = (deadByte & 0x80) !== 0;
     const model = Memory.ReadU8(b + 6, false, false) | (Memory.ReadU8(b + 7, false, false) << 8);
     const x = Memory.ReadFloat(b + 8, false, false), y = Memory.ReadFloat(b + 12, false, false), z = Memory.ReadFloat(b + 16, false, false);
     const heading = Memory.ReadFloat(b + 20, false, false), hp = Memory.ReadFloat(b + 24, false, false);
@@ -947,12 +951,21 @@ function mirrorMissionEntities(now) {
       p.setHp = hp;
       const c = p.ent.getCoordinates();
       const d2 = (c.x - x) ** 2 + (c.y - y) ** 2 + (c.z - z) ** 2;
-      if (d2 > 9 || kind === 1) {
-        if (kind === 1 && d2 < 2) continue;
+      // armed like the original, firing when it fires: in the owner's game it shoots at our copy, here at us
+      const firing = kind === 2 && armCopy(p, weapon, shooting, { x, y, z, heading }, now);
+      if (kind === 1) {
+        // a car: far off it is put in place, close by it is drawn towards its place in small steps (no jumps)
+        if (d2 > 100) { p.ent.setCoordinatesNoOffset(x, y, z); p.ent.setHeading(heading); }
+        else if (d2 > 1) { p.ent.setCoordinatesNoOffset(c.x + (x - c.x) * 0.3, c.y + (y - c.y) * 0.3, c.z + (z - c.z) * 0.3); p.ent.setHeading(heading); }
+      } else if (d2 > 16) {
         p.ent.setCoordinatesNoOffset(x, y, z);
         p.ent.setHeading(heading);
+      } else if (firing) {
+        // no walk task over the shot
       } else if (d2 > 1) {
-        Task.GoStraightToCoord(p.ent, x, y, z, 6, 1000);
+        Task.GoStraightToCoord(p.ent, x, y, z, d2 > 6 ? 6 : 4, 1000); // run when behind, else walk
+      } else if (Math.abs(((p.ent.getHeading() - heading + 540) % 360) - 180) > 20) {
+        p.ent.setHeading(heading);
       }
     } catch (e) { log(`[sa-coop] mission entity ${h}: ${e}`); }
   }
@@ -1189,24 +1202,30 @@ function tellPartner(me) {
 // ---- main loop ------------------------------------------------------------------------------------------
 log("[sa-coop] loaded");
 // ---- one world for both (11-15, from the Vice City build) ---------------------------------------------------------
-// Near the host, the guest's game spawns no peds or traffic of its own: the host sends its ordinary peds and cars
+// Near the host, the guest's game makes no peds or traffic of its own: the host sends its ordinary peds and cars
 // around the guest (WORLD, about 8 times a second) and the guest shows copies of them. Far from the host the guest's
-// own population comes back. Damage a guest does to a copy of a ped goes to the host (EVW.HIT); a car the guest
-// drives off in becomes the guest's own and the host removes its original (EVW.TAKE).
+// own population comes back. The police stay each player's own (a game only sends its police after its own player),
+// so each side also sends its police to the other: everyone sees every policeman, the real ones chase you, the
+// copies chase your friend. Damage done to a copy of a ped goes to its owner (EVW.HIT); a copied car a player drives
+// off in becomes that player's and its owner removes the original (EVW.TAKE).
 // The pools, from the game's own code (Steam build 1.0.113.49697469): vehicles at RVA 0x572B598, 0xDB8 bytes each,
 // peds at 0x572B5A0, 0xB10 each; a pool is { objects, flags, count i32 }, a slot is free when its flag byte has bit 7,
 // a handle is slot * 256 + flag; the model id is the i16 at +0x3A. Everything else is asked through the game's own
-// script commands, by handle.
+// script commands, by handle. A handle that comes from a friend carries that friend's slot in its top byte (set by
+// coopnet64.asi), so copies from two friends never mix and an event finds its way back to the owner.
 const WRVA = { vehPool: 0x572B598, vehSize: 0xDB8, pedPool: 0x572B5A0, pedSize: 0xB10, model: 0x3A };
 const WORLD_SIZE = 44, WORLD_MAX = 240, WORLD_RADIUS = 120, SHARE_NEAR = 150;
 const worldBuf = Memory.Allocate(WORLD_SIZE * WORLD_MAX);
 const EVW = { HIT: 13, TAKE: 14 };
 const EV_NOTE = 20; // a line from coopnet64.asi for the player (the host's save arrived)
-const worldProxies = new Map(); // host handle -> { kind, ent, driver, model, seen, hp, lastTask, moving, headAt, driveAt }
+const worldProxies = new Map(); // owner's handle (with its slot) -> { kind, ent, driver, model, seen, hp, ... }
 const takenFromHost = new Set();
-let lastWorldSend = 0, lastDensityAt = 0, sharedMode = false, worldDiagAt = 0, worldErr = false;
+let lastWorldSend = 0, lastDensityAt = 0, lastLocalClear = 0, sharedMode = false, worldDiagAt = 0, worldErr = false;
 // never copied: trains and the tram (made on rails by the game only), trailers, radio-controlled toys
 const NO_COPY_CARS = new Set([449, 537, 538, 569, 570, 590, 435, 450, 584, 591, 606, 607, 608, 610, 611, 441, 464, 465, 501, 564, 594]);
+// the law: police, SWAT, FBI and army peds; their cars, bike, vans, helicopter, boat, tank and trucks
+const LAW_CARS = new Set([596, 597, 598, 599, 523, 427, 490, 528, 601, 497, 430, 432, 433, 470]);
+function lawPed(model) { return model >= 280 && model <= 288; }
 let emptyDm = null;
 
 function poolEach(poolRva, size, fn) {
@@ -1229,7 +1248,7 @@ function missionHandles() {
   }
   return out;
 }
-// handles that are players, friends' copies, mission things or copies of anything else: never shared
+// handles that are players, friends' copies, mission things or copies of anything else: never shared, never cleared
 function ownedHandles(me) {
   const out = missionHandles();
   out.add(+me);
@@ -1239,21 +1258,26 @@ function ownedHandles(me) {
   for (const p of worldProxies.values()) { out.add(+p.ent); if (p.driver) out.add(+p.driver); }
   return out;
 }
+// something another script of the mod made and keeps (the AI partner, a kept car)
+function tracked(h) { try { return api.coop_tracked(h) === 1; } catch (e) { return false; } }
+function outside() { try { return Streaming.GetAreaVisible() === 0; } catch (e) { return true; } }
 
-// ---- host: what is around each guest
-function hostWorldTick(me, t) {
+// ---- sending: the host everything ordinary around its guests, a guest only the police after it
+function sendWorldTick(me, t, guest) {
   if (t - lastWorldSend < 125) return;
   lastWorldSend = t;
-  const guests = [];
-  for (const r of remotes) { try { if (r && Char.DoesExist(r.ped)) guests.push(r.ped.getCoordinates()); } catch (e) {} }
-  if (!guests.length) return;
-  const near = (p) => guests.some((g) => (g.x - p.x) ** 2 + (g.y - p.y) ** 2 < WORLD_RADIUS * WORLD_RADIUS);
+  const around = [];
+  if (guest) { if (sharedMode) around.push(me.getCoordinates()); }
+  else for (const r of remotes) { try { if (r && Char.DoesExist(r.ped)) around.push(r.ped.getCoordinates()); } catch (e) {} }
+  // inside a building nothing is shared: shops and safehouses keep their own people
+  if (!around.length || !outside()) { api.coop_world_send(worldBuf, 0); return; }
+  const near = (p) => around.some((g) => (g.x - p.x) ** 2 + (g.y - p.y) ** 2 < WORLD_RADIUS * WORLD_RADIUS);
   const skip = ownedHandles(me);
   const list = [];
   poolEach(WRVA.vehPool, WRVA.vehSize, (h, p) => {
     if (list.length >= WORLD_MAX || skip.has(h)) return;
     const model = Memory.ReadI16(p + WRVA.model, false, false);
-    if (model < 400 || model > 611 || NO_COPY_CARS.has(model)) return;
+    if (model < 400 || model > 611 || NO_COPY_CARS.has(model) || (guest && !LAW_CARS.has(model))) return;
     try {
       if (!Car.DoesExist(h)) return;
       const car = new Car(h), pos = car.getCoordinates();
@@ -1268,16 +1292,17 @@ function hostWorldTick(me, t) {
   poolEach(WRVA.pedPool, WRVA.pedSize, (h, p) => {
     if (list.length >= WORLD_MAX || skip.has(h)) return;
     const model = Memory.ReadI16(p + WRVA.model, false, false);
-    if (model < 7 || model > 288) return; // ordinary peds only (CJ and special characters cannot be made by a script)
+    if (model < 7 || model > 288 || (guest && !lawPed(model))) return; // CJ and special characters cannot be made by a script
     try {
       if (!Char.DoesExist(h)) return;
       const c = new Char(h);
       if (c.isInAnyCar()) return; // drivers come with their car
       const pos = c.getCoordinates();
       if (!near(pos)) return;
-      let v = { x: 0, y: 0, z: 0 };
+      let v = { x: 0, y: 0, z: 0 }, weapon = 0, flags = 0;
       try { v = c.getVelocity(); } catch (e) {}
-      list.push({ h, kind: 2, c1: 0, c2: 0, flags: 0, model, drv: 0, pos, heading: c.getHeading(), v, hp: c.getHealth() });
+      try { weapon = c.getCurrentWeapon(); if (c.isShooting()) flags |= 2; } catch (e) {}
+      list.push({ h, kind: 2, c1: weapon, c2: 0, flags, model, drv: 0, pos, heading: c.getHeading(), v, hp: c.getHealth() });
     } catch (e) {}
   });
   list.forEach((e, i) => {
@@ -1293,26 +1318,29 @@ function hostWorldTick(me, t) {
     f.forEach((x, k) => Memory.WriteFloat(b + 12 + k * 4, Number.isFinite(x) ? x : 0, false, false));
   });
   api.coop_world_send(worldBuf, list.length);
-  if (t - worldDiagAt > 10000) { worldDiagAt = t; log(`[sa-coop] world: sending ${list.length} peds and cars to the guest`); }
+  if (t - worldDiagAt > 10000) { worldDiagAt = t; log(`[sa-coop] world: sending ${list.length}, showing ${worldProxies.size} copies`); }
 }
 
+// an event about one of our own peds or cars: the handle carries the owner's slot
 function onWorldEvent(kind, text) {
-  if (kind === EVW.HIT) {
-    const [h, dmg] = text.split(":").map((v) => parseInt(v, 10));
-    try { if (dmg > 0 && Char.DoesExist(h) && !ownedHandles(player.getChar()).has(h)) { const c = new Char(h); c.setHealth(Math.max(0, c.getHealth() - dmg)); } } catch (e) {}
-  } else if (kind === EVW.TAKE) {
-    const h = parseInt(text, 10);
-    try {
-      if (Car.DoesExist(h) && !ownedHandles(player.getChar()).has(h)) {
-        const car = new Car(h);
-        try { const d = car.getDriver(); if (d && +d > 0 && Char.DoesExist(+d)) d.delete(); } catch (e) {}
-        car.delete();
-      }
-    } catch (e) { log(`[sa-coop] take ${h}: ${e}`); }
-  }
+  const parts = text.split(":").map((v) => parseInt(v, 10));
+  const tagged = parts[0];
+  if (!Number.isFinite(tagged) || ((tagged >>> 24) & 0xff) !== api.coop_slot()) return; // somebody else's
+  const h = tagged & 0xffffff;
+  try {
+    if (ownedHandles(player.getChar()).has(h)) return;
+    if (kind === EVW.HIT) {
+      const dmg = parts[1];
+      if (dmg > 0 && Char.DoesExist(h)) { const c = new Char(h); c.setHealth(Math.max(0, c.getHealth() - dmg)); }
+    } else if (kind === EVW.TAKE && Car.DoesExist(h)) {
+      const car = new Car(h);
+      try { const d = car.getDriver(); if (d && +d > 0 && Char.DoesExist(+d)) d.delete(); } catch (e) {}
+      car.delete();
+    }
+  } catch (e) { log(`[sa-coop] world event ${kind} ${h}: ${e}`); }
 }
 
-// ---- guest: copies of the host's world
+// ---- receiving: copies of a friend's world
 function setPopulation(on) {
   try { World.SetPedDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { log(`[sa-coop] ped density: ${e}`); }
   try { World.SetCarDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { log(`[sa-coop] car density: ${e}`); }
@@ -1332,20 +1360,62 @@ function dropWorldProxy(h) {
     }
   } catch (e) {}
 }
-function guestWorldTick(me, t) {
-  // shared only near a friend: far away the host's game has nothing there to send
+// The guest's own people on foot and its own moving traffic go at once when sharing starts (the host's are shown
+// instead). Left alone: the police (they stay each player's own), anything of a mission or of the mod, the player's
+// gang, and every car without a driver (parked cars, garage cars, a kept car: deleting those could lose them).
+function clearLocalPopulation(me) {
+  const skip = ownedHandles(me), mp = me.getCoordinates();
+  const close = (c) => { const p = c.getCoordinates(); return (p.x - mp.x) ** 2 + (p.y - mp.y) ** 2 < SHARE_NEAR * SHARE_NEAR; };
+  let group = null;
+  try { group = player.getGroup(); } catch (e) {}
+  const peds = [], cars = [];
+  poolEach(WRVA.pedPool, WRVA.pedSize, (h, p) => {
+    const model = Memory.ReadI16(p + WRVA.model, false, false);
+    if (skip.has(h) || model < 7 || model > 288 || lawPed(model) || tracked(h)) return;
+    try {
+      const c = new Char(h);
+      if (!Char.DoesExist(h) || c.isInAnyCar() || !close(c)) return;
+      if (group !== null && c.isGroupMember(group)) return;
+      peds.push(c);
+    } catch (e) {}
+  });
+  poolEach(WRVA.vehPool, WRVA.vehSize, (h, p) => {
+    const model = Memory.ReadI16(p + WRVA.model, false, false);
+    if (skip.has(h) || model < 400 || model > 611 || LAW_CARS.has(model) || NO_COPY_CARS.has(model) || tracked(h)) return;
+    try {
+      if (!Car.DoesExist(h)) return;
+      const car = new Car(h);
+      if (!close(car)) return;
+      const d = car.getDriver();
+      if (!d || +d <= 0 || !Char.DoesExist(+d) || skip.has(+d) || tracked(+d)) return; // nobody at the wheel: not traffic
+      cars.push({ car, d });
+    } catch (e) {}
+  });
+  for (const c of peds) { try { c.delete(); } catch (e) {} }
+  for (const { car, d } of cars) { try { d.delete(); car.delete(); } catch (e) {} }
+  return peds.length + cars.length;
+}
+function guestModeTick(me, t) {
+  // shared only near a friend and in the open: far away the host's game has nothing there to send
   const mp = me.getCoordinates();
-  const near = remotes.some((r) => r && Char.DoesExist(r.ped) && dist2(mp, r.ped.getCoordinates()) < SHARE_NEAR * SHARE_NEAR);
+  const near = outside() && remotes.some((r) => r && Char.DoesExist(r.ped) && dist2(mp, r.ped.getCoordinates()) < SHARE_NEAR * SHARE_NEAR);
   if (near !== sharedMode || t - lastDensityAt > 5000) {
-    if (near !== sharedMode) log(`[sa-coop] world: ${near ? "shared with the host" : "own (far from the host)"}`);
+    if (near !== sharedMode) log(`[sa-coop] world: ${near ? "shared with the host" : "own (far from the host or indoors)"}`);
     sharedMode = near; lastDensityAt = t;
-    // no new peds or traffic of our own near the host; the ones already here walk and drive away by themselves
-    // (nothing of ours is deleted: a kept car, the AI partner and mission things live in the same pools)
     setPopulation(!near);
     if (!near) for (const h of [...worldProxies.keys()]) dropWorldProxy(h);
   }
+  if (sharedMode && t - lastLocalClear > 500) {
+    lastLocalClear = t;
+    const n = clearLocalPopulation(me);
+    if (n > 20) log(`[sa-coop] world: ${n} of our own peds and cars removed`);
+  }
+}
+function receiveWorldTick(me, t, guest) {
   const n = api.coop_world_get(worldBuf, WORLD_MAX);
-  if (!sharedMode) return;
+  // a guest far from the host or anyone indoors shows no copies
+  const show = guest ? sharedMode : outside();
+  if (!show) { for (const h of [...worldProxies.keys()]) dropWorldProxy(h); return; }
   for (let i = 0; i < n; i++) {
     const b = worldBuf + i * WORLD_SIZE;
     const h = Memory.ReadI32(b, false, false), kind = Memory.ReadU8(b + 4, false, false);
@@ -1360,7 +1430,7 @@ function guestWorldTick(me, t) {
   }
   for (const [h, p] of worldProxies) {
     if (t - p.seen > 1500) { dropWorldProxy(h); continue; }
-    // the guest drove off in a copy: it is the guest's car now, the host removes its original
+    // we drove off in a copy: it is ours now, its owner removes the original
     if (p.kind === 1 && me.isInAnyCar()) {
       try {
         if (+me.storeCarIsInNoSave() === +p.ent) {
@@ -1374,7 +1444,25 @@ function guestWorldTick(me, t) {
     }
   }
   if (takenFromHost.size > 400) takenFromHost.clear();
-  if (t - worldDiagAt > 10000) { worldDiagAt = t; log(`[sa-coop] world: ${worldProxies.size} copies of the host's peds and cars`); }
+}
+// a copy holds what the original holds and fires when it fires (straight ahead, as a friend's copy does)
+function armCopy(p, weapon, shooting, s, t) {
+  if (weapon !== p.weapon) {
+    try {
+      const wm = weapon > 0 && weapon <= 46 ? Weapon.GetModel(weapon) : 0;
+      if (wm > 0 && !loadModel(wm)) return;
+      p.weapon = weapon;
+      if (weapon > 0 && weapon <= 46) { p.ent.giveWeapon(weapon, 9999); if (wm > 0) Streaming.MarkModelAsNoLongerNeeded(wm); p.ent.setCurrentWeapon(weapon); }
+      else p.ent.setCurrentWeapon(0);
+    } catch (e) { p.weapon = weapon; }
+  }
+  if (shooting && weapon > 15 && t - (p.lastShot || 0) > 300) {
+    const hr = s.heading * Math.PI / 180;
+    try { Task.ShootAtCoord(p.ent, s.x - Math.sin(hr) * 25, s.y + Math.cos(hr) * 25, s.z + 0.5, 350); } catch (e) {}
+    p.lastShot = t;
+    return true;
+  }
+  return t - (p.lastShot || 0) < 400;
 }
 function updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t) {
   let p = worldProxies.get(h);
@@ -1402,9 +1490,9 @@ function updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t) {
       const ped = track(Char.Create(4, model, s.x, s.y, s.z), 2, model);
       Streaming.MarkModelAsNoLongerNeeded(model);
       try { ped.setHeading(s.heading); ped.setKeepTask(true); } catch (e) {}
-      // no reactions of its own (it would run from gunfire while the host's ped stands): the host's ped decides
+      // no reactions of its own (it would run from gunfire while the original stands): the original decides
       try { if (!emptyDm) emptyDm = DecisionMakerChar.Load(0); ped.setDecisionMaker(emptyDm); } catch (e) {}
-      p = { kind, ent: ped, driver: null, model, seen: t, hp: s.hp, lastTask: 0, moving: false };
+      p = { kind, ent: ped, driver: null, model, seen: t, hp: s.hp, lastTask: 0, moving: false, weapon: 0 };
     } else return;
     worldProxies.set(h, p);
     return;
@@ -1413,15 +1501,18 @@ function updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t) {
   if (p.kind === 2) {
     if (!Char.DoesExist(p.ent)) { worldProxies.delete(h); return; }
     const local = p.ent.getHealth();
-    if (local < p.hp - 3) sendEvent(EVW.HIT, `${h}:${Math.round(p.hp - local)}`); // our hit: the host's game decides
+    if (local < p.hp - 3) sendEvent(EVW.HIT, `${h}:${Math.round(p.hp - local)}`); // our hit: the owner's game decides
     if (s.hp <= 0) { if (local > 0) p.ent.setHealth(0); p.hp = 0; return; }
     if (Math.abs(local - s.hp) > 1) p.ent.setHealth(Math.max(1, Math.round(s.hp)));
     p.hp = s.hp;
+    const firing = armCopy(p, c1, (flags & 2) !== 0, s, t);
     const c = p.ent.getCoordinates();
     const d = Math.sqrt(dist2(c, s));
     const speed = Math.sqrt(s.vx * s.vx + s.vy * s.vy);
     if (d > 4) {
       p.ent.setCoordinatesNoOffset(s.x, s.y, s.z); p.ent.setHeading(s.heading); p.moving = false;
+    } else if (firing) {
+      // shooting: no walk task over the shot
     } else if (speed > 0.3 || d > 1) {
       if (t - p.lastTask > 300) {
         const moveState = speed + d > 6 ? 7 : speed + d > 2.5 ? 6 : 4; // sprint, run, walk
@@ -1466,8 +1557,11 @@ function leaveSharedWorld() {
 }
 function sharedWorldTick(me, t) {
   try {
-    if (isGuest()) guestWorldTick(me, t);
-    else { leaveSharedWorld(); if (anyFriend()) hostWorldTick(me, t); }
+    if (!anyFriend()) { leaveSharedWorld(); return; }
+    const guest = isGuest();
+    if (guest) guestModeTick(me, t);
+    sendWorldTick(me, t, guest);
+    receiveWorldTick(me, t, guest);
   } catch (e) { if (!worldErr) { worldErr = true; log(`[sa-coop] world: ${e}`); } }
 }
 

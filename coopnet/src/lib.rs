@@ -74,7 +74,12 @@ fn net_thread(sess: Session) {
     let mut last_join = Instant::now() - Duration::from_secs(5);
     let mut last_send = Instant::now();
     let mut last_ents = Instant::now();
-    let mut buf = [0u8; 2048];
+    let mut buf = [0u8; 4096];
+    // short-code sessions have no reliable channel: the host's save goes out three times over, a few parts per
+    // turn of this loop; the guest takes each part once
+    let mut save_out: std::collections::VecDeque<Vec<u8>> = Default::default();
+    let mut save_seen = [false; MAX_PLAYERS];
+    let mut save = SaveIn::default();
 
     loop {
         let (status, mine, stop, revive) = {
@@ -93,6 +98,31 @@ fn net_thread(sess: Session) {
                     let _ = sock.send_to(&packet(ENTS, &b), sess.server);
                 }
                 last_ents = Instant::now();
+            }
+            if let Some(w) = shared().lock().unwrap().world_out.take() {
+                for chunk in w.chunks(WORLD_PER_PACKET * WORLD_SIZE) {
+                    let mut body = vec![(chunk.len() / WORLD_SIZE) as u8];
+                    body.extend_from_slice(chunk);
+                    let _ = sock.send_to(&packet(WORLD, &body), sess.server);
+                }
+            }
+            // a friend we have not seen before: the host queues its save for them
+            let (host, here) = {
+                let s = shared().lock().unwrap();
+                (s.host, std::array::from_fn::<bool, MAX_PLAYERS, _>(|i| s.peers[i].is_some()))
+            };
+            for i in 0..MAX_PLAYERS {
+                if host && here[i] && !save_seen[i] {
+                    let packets = save_packets();
+                    for _ in 0..3 {
+                        save_out.extend(packets.iter().cloned());
+                    }
+                }
+                save_seen[i] = here[i];
+            }
+            for _ in 0..8 {
+                let Some(p) = save_out.pop_front() else { break };
+                let _ = sock.send_to(&p, sess.server);
             }
         }
         if stop {
@@ -136,6 +166,15 @@ fn net_thread(sess: Session) {
             }
             EVENT if body.len() >= 2 && s.events_in.len() < 32 => s.events_in.push_back(body[1..].to_vec()),
             ENTS if body.len() >= 2 && body.len() == 2 + body[1] as usize * ENT_SIZE => s.ents_in = Some((body[1..].to_vec(), Instant::now())),
+            WORLD if body.len() >= 2 && body.len() == 2 + body[1] as usize * WORLD_SIZE && (body[0] as usize) < MAX_PLAYERS => {
+                let slot = body[0] as usize;
+                world_in(&mut s, slot, &body[2..]);
+            }
+            SAVE if body.len() > 5 && !s.host => {
+                drop(s);
+                save.part(&body[1..]);
+                continue;
+            }
             NAMES if !body.is_empty() => {
                 for e in body[1..].chunks_exact(1 + NICK_LEN).take(body[0] as usize) {
                     if (e[0] as usize) < MAX_PLAYERS {
@@ -314,6 +353,91 @@ pub unsafe extern "C" fn coop_ents_send(data: *const u8, n: i64) -> i64 {
     b.extend_from_slice(std::slice::from_raw_parts(data, n as usize * ENT_SIZE));
     shared().lock().unwrap().ents_out = Some(b);
     1
+}
+
+/// Entries of a friend's world for the script: each handle gets the friend's slot in its top byte (handles are
+/// slot * 256 + flag, far below 2^24), so copies from two friends never mix and events find their owner.
+fn world_in(s: &mut Shared, slot: usize, entries: &[u8]) {
+    if s.world_in.len() > 400 * WORLD_SIZE {
+        s.world_in.clear(); // the script stopped asking: start over
+    }
+    for e in entries.chunks_exact(WORLD_SIZE) {
+        let at = s.world_in.len();
+        s.world_in.extend_from_slice(e);
+        s.world_in[at + 3] = slot as u8;
+    }
+}
+
+/// The host's newest save as SAVE packets (part u16, parts u16, [name on part 0], bytes).
+fn save_packets() -> Vec<Vec<u8>> {
+    let Some((name, bytes)) = saves::newest_save() else {
+        log_line("saves: no save to send to the guest");
+        return vec![];
+    };
+    let parts = bytes.len().div_ceil(SAVE_PART) as u16;
+    log_line(&format!("saves: sending {name} ({} bytes, {parts} parts) to the guest", bytes.len()));
+    bytes
+        .chunks(SAVE_PART)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let mut body = Vec::with_capacity(chunk.len() + 40);
+            body.extend_from_slice(&(i as u16).to_le_bytes());
+            body.extend_from_slice(&parts.to_le_bytes());
+            if i == 0 {
+                body.push(name.len() as u8);
+                body.extend_from_slice(name.as_bytes());
+            }
+            body.extend_from_slice(chunk);
+            packet(SAVE, &body)
+        })
+        .collect()
+}
+
+/// A guest putting the host's save together from its parts (in any order, repeats ignored; once per session).
+#[derive(Default)]
+struct SaveIn {
+    name: String,
+    parts: Vec<Option<Vec<u8>>>,
+    done: bool,
+}
+
+impl SaveIn {
+    fn part(&mut self, body: &[u8]) {
+        if self.done || body.len() <= 4 {
+            return;
+        }
+        let part = u16::from_le_bytes([body[0], body[1]]) as usize;
+        let parts = u16::from_le_bytes([body[2], body[3]]) as usize;
+        let mut data = &body[4..];
+        if self.parts.len() != parts {
+            self.parts = vec![None; parts.min(9000)];
+        }
+        if part == 0 {
+            if data.is_empty() || data.len() < 1 + data[0] as usize {
+                return;
+            }
+            self.name = String::from_utf8_lossy(&data[1..1 + data[0] as usize]).into_owned();
+            data = &data[1 + data[0] as usize..];
+        }
+        if part >= self.parts.len() {
+            return;
+        }
+        self.parts[part] = Some(data.to_vec());
+        if self.parts.iter().all(|p| p.is_some()) {
+            self.done = true;
+            let bytes: Vec<u8> = self.parts.drain(..).flatten().flatten().collect();
+            let line = saves::receive_host_save(&self.name, &bytes).unwrap_or_else(|e| e);
+            log_line(&line);
+            *overlay::SAVE_NOTE.lock().unwrap() = line.clone();
+            shared().lock().unwrap().events_in.push_back([&[EV_NOTE][..], line.as_bytes()].concat());
+        }
+    }
+}
+
+/// 1 when some script of the mod made this ped or car and keeps it (the AI partner, a kept car, a copy).
+#[no_mangle]
+pub extern "C" fn coop_tracked(handle: i64) -> i64 {
+    tracked().lock().unwrap().iter().any(|e| e[3] == handle as i32) as i64
 }
 
 /// A line from the DLL for the script to show (local, never sent): event kind 20, text.
@@ -495,8 +619,7 @@ fn steam_thread(host: bool, name: String, pw: String) {
     let mut buf = [0u8; 4096];
     let mut members: Vec<u64> = vec![];
     let mut save_sent: Vec<u64> = vec![];
-    let mut save_name = String::new();
-    let mut save_parts: Vec<Option<Vec<u8>>> = vec![];
+    let mut save = SaveIn::default();
     let mut last_members = Instant::now() - Duration::from_secs(5);
     let mut last_send = Instant::now();
     loop {
@@ -552,23 +675,8 @@ fn steam_thread(host: bool, name: String, pw: String) {
             let new: Vec<u64> = members.iter().copied().filter(|&m| m != st.me() && !save_sent.contains(&m)).collect();
             for m in new {
                 save_sent.push(m);
-                match saves::newest_save() {
-                    Some((name, bytes)) => {
-                        let parts = bytes.len().div_ceil(SAVE_PART) as u16;
-                        for (i, chunk) in bytes.chunks(SAVE_PART).enumerate() {
-                            let mut body = Vec::with_capacity(chunk.len() + 40);
-                            body.extend_from_slice(&(i as u16).to_le_bytes());
-                            body.extend_from_slice(&parts.to_le_bytes());
-                            if i == 0 {
-                                body.push(name.len() as u8);
-                                body.extend_from_slice(name.as_bytes());
-                            }
-                            body.extend_from_slice(chunk);
-                            st.send(m, &packet(SAVE, &body), steam::SEND_RELIABLE);
-                        }
-                        log_line(&format!("saves: sent {name} ({} bytes, {parts} parts) to the guest", bytes.len()));
-                    }
-                    None => log_line("saves: no save to send to the guest"),
+                for p in save_packets() {
+                    st.send(m, &p, steam::SEND_RELIABLE);
                 }
             }
         }
@@ -599,37 +707,10 @@ fn steam_thread(host: bool, name: String, pw: String) {
                 REVIVE if body.len() == 2 && body[1] as i32 == s.slot => s.revived = true,
                 EVENT if body.len() >= 2 && s.events_in.len() < 32 => s.events_in.push_back(body[1..].to_vec()),
                 ENTS if !body.is_empty() && body.len() == 1 + body[0] as usize * ENT_SIZE => s.ents_in = Some((body.to_vec(), Instant::now())),
-                // guests only: the script of the session's host is the only one that sends these
-                WORLD if !body.is_empty() && body.len() == 1 + body[0] as usize * WORLD_SIZE && !host => {
-                    if s.world_in.len() > 400 * WORLD_SIZE {
-                        s.world_in.clear(); // the script stopped asking: start over
-                    }
-                    s.world_in.extend_from_slice(&body[1..]);
-                }
+                WORLD if !body.is_empty() && body.len() == 1 + body[0] as usize * WORLD_SIZE => world_in(&mut s, slot, &body[1..]),
                 SAVE if body.len() > 4 && !host => {
-                    let part = u16::from_le_bytes([body[0], body[1]]) as usize;
-                    let parts = u16::from_le_bytes([body[2], body[3]]) as usize;
-                    let mut data = &body[4..];
-                    if part == 0 {
-                        if data.is_empty() || data.len() < 1 + data[0] as usize {
-                            continue;
-                        }
-                        save_name = String::from_utf8_lossy(&data[1..1 + data[0] as usize]).into_owned();
-                        data = &data[1 + data[0] as usize..];
-                        save_parts = vec![None; parts.min(9000)];
-                    }
-                    if part < save_parts.len() && save_parts.len() == parts {
-                        save_parts[part] = Some(data.to_vec());
-                        if save_parts.iter().all(|p| p.is_some()) {
-                            let bytes: Vec<u8> = save_parts.drain(..).flatten().flatten().collect();
-                            drop(s);
-                            let line = saves::receive_host_save(&save_name, &bytes).unwrap_or_else(|e| e);
-                            log_line(&line);
-                            *overlay::SAVE_NOTE.lock().unwrap() = line.clone();
-                            shared().lock().unwrap().events_in.push_back([&[EV_NOTE][..], line.as_bytes()].concat());
-                            continue;
-                        }
-                    }
+                    drop(s);
+                    save.part(body);
                 }
                 _ => {}
             }

@@ -99,6 +99,17 @@ pub fn run_server(sock: UdpSocket, key: u32, players: Players) {
                 out.extend_from_slice(body);
                 broadcast(&sock, &peers, Some(s), &packet(ENTS, &out));
             }
+            // the shared world and the host's save: passed on as they are, with the sender's slot in front
+            (WORLD, Some(s)) if !body.is_empty() && body.len() == 1 + body[0] as usize * WORLD_SIZE && (body[0] as usize) <= WORLD_PER_PACKET => {
+                let mut out = vec![s as u8];
+                out.extend_from_slice(body);
+                broadcast(&sock, &peers, Some(s), &packet(WORLD, &out));
+            }
+            (SAVE, Some(s)) if body.len() > 4 && body.len() <= SAVE_PART + 64 => {
+                let mut out = vec![s as u8];
+                out.extend_from_slice(body);
+                broadcast(&sock, &peers, Some(s), &packet(SAVE, &out));
+            }
             (LEAVE, Some(s)) => {
                 peers[s] = None;
                 broadcast(&sock, &peers, None, &packet(LEAVE, &[s as u8]));

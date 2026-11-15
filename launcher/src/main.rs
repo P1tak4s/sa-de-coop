@@ -210,6 +210,7 @@ struct Opts {
     tough: bool,
     gfx: usize, // index into GRAPHICS
     dlss: bool,
+    intro: bool, // skip the intro video (kept as our own Game.ini, not in cars.txt)
 }
 
 fn save_opts(o: Opts) {
@@ -233,7 +234,7 @@ fn load_opts(game: &Path) -> Opts {
             g => GRAPHICS.iter().position(|(n, _)| *n == g).unwrap_or(2),
         }
     });
-    Opts { grip: grip || !installed(game), fast, range: t.contains("range=1"), tough: t.contains("tough=1"), gfx: gfx.min(3), dlss: t.contains("dlss=1") }
+    Opts { grip: grip || !installed(game), fast, range: t.contains("range=1"), tough: t.contains("tough=1"), gfx: gfx.min(3), dlss: t.contains("dlss=1"), intro: intro_skipped() == Some(true) || !installed(game) }
 }
 
 fn cars_file() -> PathBuf {
@@ -389,6 +390,48 @@ fn engine_ini() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").map(|u| {
         PathBuf::from(u).join(r"Documents\Rockstar Games\GTA San Andreas Definitive Edition\Config\WindowsNoEditor\Engine.ini")
     })
+}
+
+// ---- skip the intro video: our own Game.ini next to Engine.ini (never a Game.ini the player made) ----------------
+const INTRO_MARK: &str = "; SA Co-op: skip the intro video (this file is removed when the option is off)";
+
+fn game_ini() -> Option<PathBuf> {
+    engine_ini().map(|e| e.with_file_name("Game.ini"))
+}
+
+/// Some(true/false) = ours is there / nothing is there; None = the player's own Game.ini, left alone.
+fn intro_skipped() -> Option<bool> {
+    let ini = game_ini()?;
+    match std::fs::read_to_string(&ini) {
+        Ok(t) if t.starts_with(INTRO_MARK) => Some(true),
+        Ok(_) => None,
+        Err(_) => Some(false),
+    }
+}
+
+fn set_skip_intro(on: bool) -> String {
+    let Some(ini) = game_ini() else { return "No user folder.".into() };
+    match (intro_skipped(), on) {
+        (None, _) => "Intro video: you have your own Game.ini, left as it is.".into(),
+        (Some(true), false) => {
+            let _ = std::fs::remove_file(&ini);
+            "Intro video: plays again.".into()
+        }
+        (_, false) => "Intro video: plays.".into(),
+        (_, true) => {
+            let text = format!("{INTRO_MARK}
+[/Script/MoviePlayer.MoviePlayerSettings]
+bWaitForMoviesToComplete=False
+bMoviesAreSkippable=True
+StartupMovies=
+");
+            let _ = std::fs::create_dir_all(ini.parent().unwrap());
+            match std::fs::write(&ini, text) {
+                Ok(_) => "Intro video: skipped.".into(),
+                Err(e) => format!("Intro video: could not write Game.ini ({e})."),
+            }
+        }
+    }
 }
 
 fn current_graphics() -> &'static str {
@@ -707,6 +750,7 @@ fn apply_options(game: &Path, o: Opts) -> Vec<String> {
     }
     log.push(if o.tough { "Tougher enemies on.".into() } else { "Enemies: the game's own.".into() });
     log.push(set_dlss(game, o.dlss));
+    log.push(set_skip_intro(o.intro));
     save_opts(o);
     log
 }
@@ -741,6 +785,7 @@ fn uninstall(game: &Path) -> Vec<String> {
     }
     let g = set_graphics("");
     let d = set_dlss(game, false);
+    let _ = set_skip_intro(false);
     let _ = std::fs::remove_dir_all(game.join("sa-coop"));
     vec!["Mod removed. Your saves are untouched.".into(), g, d]
 }
@@ -911,7 +956,7 @@ impl App {
     fn new(ctx: &egui::Context) -> App {
         let game = find_game();
         style(ctx, None);
-        let opts = game.as_deref().map(load_opts).unwrap_or(Opts { grip: true, fast: false, range: false, tough: false, gfx: 2, dlss: false });
+        let opts = game.as_deref().map(load_opts).unwrap_or(Opts { grip: true, fast: false, range: false, tough: false, gfx: 2, dlss: false, intro: true });
         let art = steam_art(ctx, game.as_deref());
         let upd = std::sync::Arc::new(std::sync::Mutex::new(Upd::Idle));
         if let Ok(me) = std::env::current_exe() {
@@ -1009,6 +1054,8 @@ impl eframe::App for App {
                         ui.label(egui::RichText::new("Guns reach and lock on 60% further, for you and for everyone else.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.tough, "Tougher enemies");
                         ui.label(egui::RichText::new("Armed enemies aim better, shoot more often and take more hits.").small().color(MUTED));
+                        ui.checkbox(&mut self.opts.intro, "Skip the intro video");
+                        ui.label(egui::RichText::new("The game starts without the Rockstar video.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.dlss, "Latest NVIDIA DLSS");
                         ui.label(egui::RichText::new("Downloads NVIDIA's newest DLSS from NVIDIA (the game has a 2021 one). Then turn DLSS on in the game's Graphics settings. NVIDIA RTX cards only.").small().color(MUTED));
                         ui.label(egui::RichText::new("You can change all of this later in the game too: Co-op menu, Settings.").small().color(MUTED));
