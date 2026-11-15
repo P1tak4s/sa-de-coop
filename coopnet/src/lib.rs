@@ -339,6 +339,12 @@ pub fn send_raw_event(ev: Vec<u8>) {
     }
 }
 
+/// The cheat picked in the co-op menu's Cheats tab since the last call (1-based, 0 = none). Read once.
+#[no_mangle]
+pub extern "C" fn coop_cheat_take() -> i64 {
+    overlay::CHEAT.swap(0, std::sync::atomic::Ordering::SeqCst) as i64
+}
+
 /// 1 = a hit that would kill our player leaves it 2 health (it goes down instead); the script sets it while a friend
 /// is connected and not down.
 #[no_mangle]

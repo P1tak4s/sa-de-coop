@@ -19,6 +19,15 @@ pub static SAVE_NOTE: std::sync::Mutex<String> = std::sync::Mutex::new(String::n
 pub const SKIN_NAMES: [&str; 14] = ["Grove Street", "Grove Street 2", "Grove Street 3", "Ballas", "Vagos", "Aztecas",
     "Triads", "Da Nang Boys", "Biker", "Police", "Medic", "Firefighter", "Army", "Mafia"];
 
+/// The cheats tab: a pressed entry, carried out by the script (coop_cheat_take). Names as in the game's cheat list.
+pub static CHEAT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub const CHEATS: [&str; 22] = [
+    "Health, armour, $250 000", "Weapon set 1", "Weapon set 2", "Weapon set 3", "Full ammo", "Jetpack",
+    "Parachute", "Wanted level up", "Clear wanted level", "Never wanted (on/off)", "Can't be hurt (on/off)",
+    "Max muscle, stamina, skills", "Spawn Rhino", "Spawn Hydra", "Spawn Hunter", "Spawn Infernus",
+    "Spawn NRG-500", "Spawn Monster", "Sunny weather", "Storm", "Noon", "Midnight",
+];
+
 pub fn toggle() {
     let was = OPEN.fetch_xor(true, Ordering::SeqCst);
     crate::log_line(&format!("F9: co-op menu {}", if was { "closed" } else { "opened" }));
@@ -30,6 +39,7 @@ pub struct CoopMenu {
     pw: String,
     join_tab: bool,
     settings_tab: bool,
+    cheats_tab: bool,
     fonts_ok: bool,
     last_status: i32,
 }
@@ -125,8 +135,9 @@ impl ImguiRenderLoop for CoopMenu {
         let mut close = false;
         let mut go = false;
         let mut tab_click: Option<usize> = None;
-        let join_tab = self.join_tab && !self.settings_tab;
-        let settings_tab = self.settings_tab;
+        let join_tab = self.join_tab && !self.settings_tab && !self.cheats_tab;
+        let settings_tab = self.settings_tab && !self.cheats_tab;
+        let cheats_tab = self.cheats_tab;
         // a running session (also the bot test) no longer blocks Create / Join: pressing it starts over
         let can = !self.name.trim().is_empty();
         let st_owned = match (crate::status_code(), crate::current_code()) {
@@ -148,10 +159,10 @@ impl ImguiRenderLoop for CoopMenu {
                 let dl = ui.get_window_draw_list();
                 let origin = ui.cursor_screen_pos();
                 // ---- tabs (Beckett, like "controls / gameplay / graphics")
-                let tab_w = w / 3.0;
+                let tab_w = w / 4.0;
                 let tab_h = ROW_H * 1.15;
-                let current = if settings_tab { 2 } else if join_tab { 1 } else { 0 };
-                for (i, label) in ["Create", "Join", "Settings"].iter().enumerate() {
+                let current = if cheats_tab { 3 } else if settings_tab { 2 } else if join_tab { 1 } else { 0 };
+                for (i, label) in ["Create", "Join", "Settings", "Cheats"].iter().enumerate() {
                     let on = i == current;
                     let p0 = [origin[0] + tab_w * i as f32, origin[1]];
                     let p1 = [p0[0] + tab_w - 4.0, p0[1] + tab_h];
@@ -180,6 +191,30 @@ impl ImguiRenderLoop for CoopMenu {
                     hover && ui.is_mouse_clicked(imgui::MouseButton::Left)
                 };
 
+                if cheats_tab {
+                    // two columns of entries; a click is carried out by the script in the game
+                    let col_w = w / 2.0;
+                    let rows = CHEATS.len().div_ceil(2);
+                    let cell_h = ROW_H * 0.82;
+                    for (i, label) in CHEATS.iter().enumerate() {
+                        let (c, r) = (i / rows, i % rows);
+                        let p0 = [origin[0] + col_w * c as f32, y + cell_h * r as f32];
+                        let p1 = [p0[0] + col_w - 4.0, p0[1] + cell_h - 2.0];
+                        let hover = ui.is_mouse_hovering_rect(p0, p1);
+                        dl.add_rect(p0, p1, if hover { ROW_HOVER } else if (r + c) % 2 == 0 { ROW_A } else { ROW_B }).filled(true).build();
+                        let ts = ui.calc_text_size(label);
+                        dl.add_text([p0[0] + 18.0, p0[1] + (cell_h - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], label);
+                        if hover && ui.is_mouse_clicked(imgui::MouseButton::Left) {
+                            CHEAT.store(i as u32 + 1, Ordering::SeqCst);
+                            crate::log_line(&format!("cheats: {label}"));
+                        }
+                    }
+                    y += cell_h * rows as f32 + 4.0;
+                    if row_bg(y, 0, "Back") {
+                        close = true;
+                    }
+                    return;
+                }
                 if settings_tab {
                     // the mod's options; Tougher enemies works at once, the rest after the game restarts
                     let mut o = crate::modsettings::get();
@@ -194,7 +229,23 @@ impl ImguiRenderLoop for CoopMenu {
                     };
                     toggle(y, 0, "Better car handling", &mut o.grip);
                     y += ROW_H;
-                    toggle(y, 1, "Faster cars (300 km/h)", &mut o.fast);
+                    // faster cars: off, or a top speed to pick (cycles)
+                    if row_bg(y, 1, "Faster cars") {
+                        if !o.fast {
+                            o.fast = true;
+                            o.speed = crate::modsettings::SPEEDS[0];
+                        } else {
+                            match crate::modsettings::SPEEDS.iter().position(|v| *v == o.speed) {
+                                Some(p) if p + 1 < crate::modsettings::SPEEDS.len() => o.speed = crate::modsettings::SPEEDS[p + 1],
+                                _ => o.fast = false,
+                            }
+                        }
+                    }
+                    let v = if o.fast { format!("<  {} km/h  >", o.speed) } else { "<  Off  >".to_string() };
+                    let ts = ui.calc_text_size(&v);
+                    dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &v);
+                    y += ROW_H;
+                    toggle(y, 2, "Drift handling", &mut o.drift);
                     y += ROW_H;
                     toggle(y, 2, "Longer gun range", &mut o.range);
                     y += ROW_H;
@@ -327,6 +378,7 @@ impl ImguiRenderLoop for CoopMenu {
         if let Some(t) = tab_click {
             self.join_tab = t == 1;
             self.settings_tab = t == 2;
+            self.cheats_tab = t == 3;
         }
         if go && !can {
             *SAVE_NOTE.lock().unwrap() = "Type a session name first.".into();

@@ -28,7 +28,7 @@ function areaOf(ch) {
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow", "coop_crash_line", "coop_replayed", "coop_down_not_dead"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow", "coop_crash_line", "coop_replayed", "coop_down_not_dead", "coop_cheat_take"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -1571,6 +1571,67 @@ function onMoved(text, me) {
   } catch (e) { err(`[sa-coop] moved: ${e}`); }
 }
 
+// ---- the co-op menu's Cheats tab (coopnet64.asi CHEATS, same order) ---------------------------------------------
+// Each entry is done with the game's own commands here (the game's cheat flags are not used). Only in our own game:
+// a car spawned here shows in the friend's game as our car.
+let neverWanted = false, cantBeHurt = false;
+const WEAPON_SETS = [[4, 22, 25, 28, 30, 33, 35, 16], [8, 24, 26, 32, 31, 34, 36, 18], [9, 23, 27, 29, 31, 34, 38, 39]];
+function giveWeapons(me, list) {
+  for (const w of list) {
+    try {
+      const m = Weapon.GetModel(w);
+      for (let i = 0; i < 40 && m > 0 && !loadModel(m); i++) pause(25); // asked for, then waited on (never forced)
+      me.giveWeapon(w, 9999);
+    } catch (e) {}
+  }
+}
+function spawnCar(me, model) {
+  for (let i = 0; i < 80 && !loadModel(model); i++) pause(25);
+  try {
+    const p = me.getCoordinates(), h = me.getHeading() * Math.PI / 180;
+    const car = Car.Create(model, p.x - Math.sin(h) * 5, p.y + Math.cos(h) * 5, p.z + 0.5);
+    Streaming.MarkModelAsNoLongerNeeded(model);
+    car.setHeading(me.getHeading());
+    car.markAsNoLongerNeeded();
+  } catch (e) { err(`[sa-coop] cheat car ${model}: ${e}`); }
+}
+function cheatTick(me) {
+  if (neverWanted) { try { player.clearWantedLevel(); } catch (e) {} }
+  if (cantBeHurt && !downed) { try { if (me.getHealth() < 100) me.setHealth(100); } catch (e) {} }
+  let id = 0;
+  try { id = api.coop_cheat_take(); } catch (e) { return; }
+  if (!id) return;
+  const said = (t) => say(`SA Co-op cheat: ${t}`);
+  try {
+    switch (id) {
+      case 1: me.setHealth(100); me.addArmor(100); player.addScore(250000); said("health, armour, $250 000"); break;
+      case 2: case 3: case 4: giveWeapons(me, WEAPON_SETS[id - 2]); said(`weapon set ${id - 1}`); break;
+      case 5: { const w = me.getCurrentWeapon(); if (w > 0) me.giveWeapon(w, 9999); said("full ammo"); break; }
+      case 6: Task.Jetpack(me); said("jetpack"); break;
+      case 7: giveWeapons(me, [46]); said("parachute"); break;
+      case 8: player.alterWantedLevelNoDrop(Math.min(6, player.storeWantedLevel() + 2)); said("wanted level up"); break;
+      case 9: player.clearWantedLevel(); said("wanted level cleared"); break;
+      case 10: neverWanted = !neverWanted; said(`never wanted ${neverWanted ? "on" : "off"}`); break;
+      case 11: cantBeHurt = !cantBeHurt; said(`can't be hurt ${cantBeHurt ? "on" : "off"}`); break;
+      case 12:
+        for (const st of [22, 23, 24]) Stat.SetFloat(st, 1000);
+        for (const st of SKILL_F) Stat.SetFloat(st, 1000);
+        for (const st of SKILL_I) Stat.SetInt(st, 1000);
+        said("max muscle, stamina, skills"); break;
+      case 13: spawnCar(me, 432); said("Rhino"); break;
+      case 14: spawnCar(me, 520); said("Hydra"); break;
+      case 15: spawnCar(me, 425); said("Hunter"); break;
+      case 16: spawnCar(me, 411); said("Infernus"); break;
+      case 17: spawnCar(me, 522); said("NRG-500"); break;
+      case 18: spawnCar(me, 444); said("Monster"); break;
+      case 19: Weather.ForceNow(0); said("sunny"); break;
+      case 20: Weather.ForceNow(8); said("storm"); break;
+      case 21: Clock.SetTimeOfDay(12, 0); said("noon"); break;
+      case 22: Clock.SetTimeOfDay(0, 0); said("midnight"); break;
+    }
+  } catch (e) { err(`[sa-coop] cheat ${id}: ${e}`); }
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -2681,7 +2742,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.49", EV_VERSION = 21;
+const VERSION = "0.9.50", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2897,6 +2958,8 @@ while (true) {
     if (code && code !== lastCode) { lastCode = code; say(`SA Co-op code (copied): ${code}`); }
   }
 
+  // the Cheats tab works alone too, not only in a session
+  try { if (player.isPlaying()) cheatTick(player.getChar()); } catch (e) {}
   const status = api.coop_status();
   claimWanted = status === 2; // only in a session: alone the script makes nothing
   if (status !== announced) {

@@ -12,11 +12,15 @@ pub struct Opts {
     pub range: bool,
     pub tough: bool,
     pub hard: bool, // with tough: the hard level. Kept in enemies.txt: the installer rewrites cars.txt
+    pub drift: bool, // drift handling (drift.txt)
+    pub speed: u16,  // top speed with "faster cars" (speed.txt)
     pub gfx: u8, // 0 off, 1 balanced, 2 high, 3 ultra
     pub dlss: bool,
 }
 
 pub const GFX: [&str; 4] = ["Off", "Balanced", "High", "Ultra"];
+/// Top speeds to pick from; the same list as the installer's TOP_SPEEDS.
+pub const SPEEDS: [u16; 5] = [260, 300, 350, 400, 500];
 
 fn file() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join(r"sa-de-coop\cars.txt")
@@ -31,7 +35,12 @@ fn read() -> Opts {
     let flag = |k: &str| t.lines().any(|l| l.trim() == format!("{k}=1"));
     let gfx = t.lines().find_map(|l| l.trim().strip_prefix("gfx=")?.parse::<u8>().ok()).unwrap_or(2).min(3);
     let hard = std::fs::read_to_string(hard_file()).unwrap_or_default().trim() == "hard=1";
-    Opts { grip: flag("grip"), fast: flag("fast"), range: flag("range"), tough: flag("tough"), hard, gfx, dlss: flag("dlss") }
+    let drift = std::fs::read_to_string(file().with_file_name("drift.txt")).unwrap_or_default().trim() == "drift=1";
+    let speed = std::fs::read_to_string(file().with_file_name("speed.txt")).ok()
+        .and_then(|t| t.trim().strip_prefix("speed=")?.parse::<u16>().ok())
+        .filter(|v| SPEEDS.contains(v))
+        .unwrap_or(300);
+    Opts { grip: flag("grip"), fast: flag("fast"), range: flag("range"), tough: flag("tough"), hard, drift, speed, gfx, dlss: flag("dlss") }
 }
 
 fn state() -> &'static Mutex<Option<Opts>> {
@@ -58,9 +67,9 @@ pub fn set(o: Opts) {
             o.grip as u8, o.fast as u8, o.range as u8, o.tough as u8, o.gfx, o.dlss as u8
         ),
     );
-    let _ = std::fs::write(hard_file(), if o.hard { "hard=1
-" } else { "hard=0
-" });
+    let _ = std::fs::write(hard_file(), if o.hard { "hard=1\n" } else { "hard=0\n" });
+    let _ = std::fs::write(file().with_file_name("drift.txt"), if o.drift { "drift=1\n" } else { "drift=0\n" });
+    let _ = std::fs::write(file().with_file_name("speed.txt"), format!("speed={}\n", o.speed));
     let needs_restart = Opts { tough: before.tough, hard: before.hard, ..o } != before;
     if needs_restart {
         start_helper();

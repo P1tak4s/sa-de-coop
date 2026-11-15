@@ -158,6 +158,20 @@ fn install(game: &Path) -> Result<Vec<String>, String> {
 // Both players should pick the same. The choice is remembered in %LOCALAPPDATA%\sa-de-coop\cars.txt.
 const HANDLING: &str = "Gameface/Content/OriginalData/GTASA/data/handling.cfg";
 const FAST_TOP_SPEED: f32 = 300.0;
+/// Top speeds to pick from (co-op menu, Settings): kept in %LOCALAPPDATA%\sa-de-coop\speed.txt ("speed=400").
+pub const TOP_SPEEDS: [f32; 5] = [260.0, 300.0, 350.0, 400.0, 500.0];
+fn extras_file(name: &str) -> PathBuf {
+    cars_file().with_file_name(name)
+}
+fn top_speed() -> f32 {
+    std::fs::read_to_string(extras_file("speed.txt")).ok()
+        .and_then(|t| t.trim().strip_prefix("speed=")?.parse::<f32>().ok())
+        .filter(|v| TOP_SPEEDS.contains(v))
+        .unwrap_or(FAST_TOP_SPEED)
+}
+fn drift_on() -> bool {
+    std::fs::read_to_string(extras_file("drift.txt")).is_ok_and(|t| t.trim() == "drift=1")
+}
 /// Not made faster: trains, RC toys, bicycles and work machines (boats and aircraft are found in the file itself).
 const NOT_FAST: [&str; 19] = [
     "FREIGHT", "STREAK", "TRAM", "FREIFLAT", "STREAKC", "RCBANDIT", "RCTIGER", "RCCAM", "BIKE", "BMX", "MTBIKE",
@@ -167,7 +181,13 @@ const NOT_FAST: [&str; 19] = [
 /// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: C turn mass (2), G centre of mass height (6),
 /// I traction (8), J traction loss (9), N top speed (12),
 /// O engine acceleration (13), Q drive type (15), R engine type (16), S brake deceleration (17), b damping (22).
+#[allow(dead_code)]
 fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::HashSet<String>) -> String {
+    retune_line_with(line, grip, fast, false, FAST_TOP_SPEED, not_fast)
+}
+
+/// `drift`: the rear lets go (rear-wheel drive, less grip at the back, more steering lock); `top`: the top speed.
+fn retune_line_with(line: &str, grip: bool, fast: bool, drift: bool, top_speed: f32, not_fast: &std::collections::HashSet<String>) -> String {
     let t: Vec<&str> = line.split_whitespace().collect();
     let first = t.first().copied().unwrap_or("");
     let vehicle = t.len() > 22
@@ -196,12 +216,28 @@ fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::
             set(&mut out, 6, v - 0.1);
         }
     }
+    if drift && !NOT_FAST.contains(&first) && !not_fast.contains(first) {
+        // 8 traction lower, 9 less grip once sliding, 10 grip moved to the front (the rear steps out), 15 rear-wheel
+        // drive (front-wheel and four-wheel drive cars cannot drift), 20 more steering lock to hold the angle
+        for (i, k, min) in [(8, 0.72, 0.4), (9, 0.75, 0.3)] {
+            if let Some(v) = num(&out, i) {
+                set(&mut out, i, (v * k).max(min));
+            }
+        }
+        set(&mut out, 10, 0.56);
+        if out[15] != "R" {
+            out[15] = "R".into();
+        }
+        if let Some(v) = num(&out, 20) {
+            set(&mut out, 20, v.max(50.0));
+        }
+    }
     if fast && !not_fast.contains(first) && !NOT_FAST.contains(&first) {
         if let (Some(top), Some(acc)) = (num(&out, 12), num(&out, 13)) {
-            if top > 0.0 && top < FAST_TOP_SPEED {
+            if top > 0.0 && top < top_speed {
                 // more pull in proportion, so a slow car can actually reach the new top speed
-                let k = (FAST_TOP_SPEED / top).sqrt().min(1.6);
-                set(&mut out, 12, FAST_TOP_SPEED);
+                let k = (top_speed / top).sqrt().min(2.0);
+                set(&mut out, 12, top_speed);
                 set(&mut out, 13, (acc * k).min(100.0));
             }
         }
@@ -262,7 +298,8 @@ fn cars_choice(game: &Path) -> (bool, bool) {
 fn set_car_handling(extra: &Path, gameface: &Path, grip: bool, fast: bool) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     let target = gameface.join(r"Content\Paks\~mods\coopcars_P.pak");
-    if !grip && !fast {
+    let (drift, top) = (drift_on(), top_speed());
+    if !grip && !fast && !drift {
         let _ = std::fs::remove_file(&target);
         return Ok("Cars: the game's own handling and speed.".into());
     }
@@ -283,7 +320,7 @@ fn set_car_handling(extra: &Path, gameface: &Path, grip: bool, fast: bool) -> Re
         .filter(|l| l.starts_with(['%', '$']))
         .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
         .collect();
-    let tuned: Vec<String> = text.lines().map(|l| retune_line(l, grip, fast, &not_fast)).collect();
+    let tuned: Vec<String> = text.lines().map(|l| retune_line_with(l, grip, fast, drift, top, &not_fast)).collect();
     let tmp = std::env::temp_dir().join("sa-coop-cars");
     let _ = std::fs::remove_dir_all(&tmp);
     let file = tmp.join("dst").join(HANDLING);
