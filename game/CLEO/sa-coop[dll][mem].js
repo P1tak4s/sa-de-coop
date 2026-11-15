@@ -105,7 +105,8 @@ function flag(op, name) {
   } catch (e) { return 0; }
 }
 let claimOff = false, claimWanted = false, claimFrom = 0, claimSafe = false;
-try { claimOff = flag(0, "claim") === 1; if (claimOff) logx("[sa-coop] game thread claim: the game died right after one last time, off"); } catch (e) {}
+// off for this run only: the marker goes, so the next run tries again (before, once off it stayed off for good)
+try { claimOff = flag(0, "claim") === 1; if (claimOff) { flag(2, "claim"); logx("[sa-coop] game thread claim: the game died right after one last time, off for this run"); } } catch (e) {}
 function pause(ms) {
   try { api.coop_release(); } catch (e) {}
   wait(ms);
@@ -960,7 +961,9 @@ function tellWorld(mySlot, now) {
   cutWas = running; cutNameWas = cutName;
   const m = missionName();
   // said when it changes, and again every 5 s and when a friend joins: an event sent before they were there is lost
-  if (m !== missionWas || joined || (friends && now - missionSentAt > 5000)) { missionWas = m; missionSentAt = now; sendEvent(EV.MISSION, m); }
+  // only the host's mission counts: a guest's game runs scripts of its own story (17:55: the two games told each
+  // other "your friend started a mission" back and forth, and the guest was pulled to the host for nothing)
+  if (!isGuest() && (m !== missionWas || joined || (friends && now - missionSentAt > 5000))) { missionWas = m; missionSentAt = now; sendEvent(EV.MISSION, m); }
 }
 
 // a friend's cutscene: play the same one here (only when we are free: on foot, not on our own mission)
@@ -1230,7 +1233,7 @@ function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0,
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
 // Row 2): left at the other end of the map it saw nothing of the mission and could not take part.
 function onFriendMission(text, me) {
-  if (text === friendMission) return; // sent again every 5 s: only a change counts
+  if (!isGuest() || text === friendMission) return; // the host's mission only // sent again every 5 s: only a change counts
   friendMission = text;
   const started = !!text && text !== "noname";
   if (started) lastFriendMission = text;
@@ -2262,7 +2265,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.24", EV_VERSION = 21;
+const VERSION = "0.9.25", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;

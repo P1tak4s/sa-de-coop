@@ -452,13 +452,17 @@ pub unsafe extern "C" fn coop_flag(op: i64, name: *const u8) -> i64 {
     }
     let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("sa-de-coop")) else { return 0 };
     let path = dir.join(format!("{n}.flag"));
+    // The marker holds the game's process id. Loading a save restarts the scripts in the same process: a marker
+    // left by this same process is not "the game died" (11-15 17:55: a load within 20 s of joining turned the game
+    // thread claim off for good, on both PCs, and the crashes it prevents came back).
+    let pid = std::process::id().to_string();
     match op {
         1 => {
             let _ = std::fs::create_dir_all(&dir);
-            std::fs::write(&path, b"1").is_ok() as i64
+            std::fs::write(&path, pid.as_bytes()).is_ok() as i64
         }
         2 => std::fs::remove_file(&path).is_ok() as i64,
-        _ => path.exists() as i64,
+        _ => std::fs::read_to_string(&path).is_ok_and(|t| t.trim() != pid) as i64,
     }
 }
 
@@ -483,8 +487,10 @@ pub unsafe extern "C" fn coop_crash_line(out: *mut u8, max: i64) -> i64 {
 }
 
 fn crash_report() -> Option<Vec<String>> {
-    let docs = std::path::PathBuf::from(std::env::var_os("USERPROFILE")?).join(r"Documents\Rockstar Games\GTA San Andreas Definitive Edition\Crashes");
-    let newest = std::fs::read_dir(&docs).ok()?.flatten()
+    let home = std::path::PathBuf::from(std::env::var_os("USERPROFILE")?);
+    let newest = ["Documents", r"OneDrive\Documents"].iter()
+        .filter_map(|d| std::fs::read_dir(home.join(d).join(r"Rockstar Games\GTA San Andreas Definitive Edition\Crashes")).ok())
+        .flat_map(|rd| rd.flatten())
         .filter_map(|e| { let f = e.path().join("CrashContext.runtime-xml"); let t = std::fs::metadata(&f).ok()?.modified().ok()?; Some((t, f)) })
         .max_by_key(|(t, _)| *t)?;
     let stamp = format!("{:?}", newest.0);
