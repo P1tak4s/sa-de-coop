@@ -1048,6 +1048,9 @@ function playCutscene(text, me) {
           if (!cleared && Date.now() - from > 3000) { cleared = true; try { flag(2, "cutscene"); } catch (e) {} }
           if (Date.now() - polledAt > 150) {
             polledAt = Date.now();
+            // our state keeps going out: a minute without it and the host's game took us for gone, made us anew
+            // after the cutscene and lost which car we drive (18:06, a second car for us)
+            try { writeMine(me); } catch (e) {}
             skipTick();
             const sig = pollCut();
             if (sig.ended) theirsEnded = true;
@@ -1287,6 +1290,9 @@ const entBuf = Memory.Allocate(ENT_SIZE * MAX_ENTS);
 const EVM = { HIT: 4, MONEY: 5 };
 let missionMoneyAt = null, lastEntsAt = 0, passedAt = "";
 let entsLostAt = 0;
+// mission car copies kept because a player sat in them (dropProxy): taken back if the host lists the car again.
+// Made anew they stood twice, the kept one and a new one (11-15 18:07: "the cars are still doubled for him").
+const keptCopies = new Map();
 const proxies = new Map(); // owner handle -> { kind, ent, model, blip, setHp, seen }
 
 function ownMissionEntities() {
@@ -1349,7 +1355,7 @@ function dropProxy(h) {
       const me = player.getChar();
       let used = me.isInAnyCar() && +me.storeCarIsInNoSave() === +p.ent;
       for (const r of remotes) if (r && r.car && +r.car === +p.ent) { used = true; r.borrowed = false; r.borrowedProxy = 0; }
-      if (used) { p.ent.markAsNoLongerNeeded(); logx(`[sa-coop] mission car copy ${h} gone in the friend's game: kept, a player sits in it`); }
+      if (used) { keptCopies.set(h, p.ent); logx(`[sa-coop] mission car copy ${h} gone in the friend's game: kept, a player sits in it`); }
       else p.ent.delete();
     }
   } catch (e) {}
@@ -1385,6 +1391,13 @@ function mirrorMissionEntities(now) {
         if (dead || !(kind === 2 ? model > 0 && model < 312 : model >= 400 && model <= 611)) continue;
         // story characters (Sweet, Ryder: models 290..299) cannot be loaded by a script: a Grove Street member
         // stands in for them, or the guest saw nobody at all (11-15: "he does not see Sweet")
+        const kept = kind === 1 ? keptCopies.get(h) : null;
+        keptCopies.delete(h);
+        if (kept && Car.DoesExist(kept)) {
+          proxies.set(h, { kind, ent: track(kept, 1, model), model, blip: null, setHp: hp });
+          logx(`[sa-coop] mission car ${h} back in the friend's game: the kept copy is used again`);
+          continue;
+        }
         const use = kind === 2 ? (model >= 290 && model <= 299 ? 106 : model) : safeCarModel(model);
         if (!loadModel(use)) continue;
         const ent = track(kind === 2 ? Char.Create(4, use, x, y, z) : Car.Create(use, x, y, z), kind, use);
@@ -2267,7 +2280,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.26", EV_VERSION = 21;
+const VERSION = "0.9.27", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
