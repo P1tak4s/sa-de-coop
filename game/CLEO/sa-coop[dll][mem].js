@@ -1192,9 +1192,10 @@ function onCutLoad(text, me) {
   if (!isGuest() || playingCut || cutOff || downed || !/^[A-Za-z0-9_]{2,24}$/.test(text) || text === preloaded) return;
   try {
     loadFriendText(friendMission && friendMission !== "noname" ? friendMission : text.replace(/[a-z]$/i, ""), true);
-    Cutscene.Load(text);
-    preloaded = text;
-    logx(`[sa-coop] cutscene ${text}: loading with the host`);
+    // Only its texts now. Loading the cutscene itself ahead of time (0.9.32) was followed by the guest's game dying
+    // twice within half a minute (11-15 19:21 and 19:23, both right after "RYDER3 loaded"): off until the crash
+    // report says otherwise. The cutscene is loaded when the host's starts, as before.
+    logx(`[sa-coop] cutscene ${text}: the host is loading it`);
   } catch (e) { err(`[sa-coop] cutscene preload ${text}: ${e}`); }
 }
 const deferred = [];
@@ -2378,7 +2379,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.33", EV_VERSION = 21;
+const VERSION = "0.9.34", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;

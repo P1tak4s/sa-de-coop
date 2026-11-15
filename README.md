@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/P1tak4s/sa-de-coop/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/P1tak4s/sa-de-coop?include_prereleases&label=release&color=2e9640"></a>
-  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-2e9640"></a>
+  <a href="LICENSE"><img alt="GPL-3.0 licence" src="https://img.shields.io/badge/licence-GPL--3.0-2e9640"></a>
   <img alt="Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-555">
   <img alt="Game build" src="https://img.shields.io/badge/game%20build-1.0.113.49697469-555">
   <img alt="Status" src="https://img.shields.io/badge/status-early%20test%20build-e8862f">
@@ -253,7 +253,7 @@ by ThirteenAG, [hudhook](https://github.com/veeenu/hudhook), [repak](https://git
 [UAssetAPI](https://github.com/atenfyr/UAssetAPI). Ideas from [SA:COOP](https://github.com/Karimov-Akbar/sa-coop)
 for the classic game. Third-party files keep their own licences (included).
 
-Code in this repository: [MIT](LICENSE).
+Code in this repository: [GNU GPL 3.0](LICENSE) (until 15 Nov 2026: MIT; copies taken before then keep that licence).
 
 Not affiliated with or endorsed by Rockstar Games or Take-Two Interactive. Grand Theft Auto and San Andreas are their
 trademarks. This mod contains no game files; you need your own copy of the game.

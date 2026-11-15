@@ -1,9 +1,9 @@
 [package]
 name = "sa-coop"
-version = "0.9.33"
+version = "0.9.34"
 edition = "2021"
 description = "SA Co-op installer"
-license = "MIT"
+license = "GPL-3.0-only"
 repository = "https://github.com/P1tak4s/sa-de-coop"
 
 [dependencies]
