@@ -844,6 +844,7 @@ function hearWorld(me) {
     else if (kind === EV_STATS) onStats(text);
     else if (kind === EVW.HIT || kind === EVW.TAKE) onWorldEvent(kind, text);
     else if (kind === EV_NOTE) { hostSaveNote = text; say(`SA Co-op: ${text}`); }
+    else if (kind === EV_VERSION) onVersion(text, Date.now());
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
@@ -1594,6 +1595,25 @@ function leaveSharedWorld() {
   sharedMode = false;
   setPopulation(true);
 }
+// ---- both must run the same version: say so in the game when they do not ---------------------------------------
+// The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
+// the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
+const VERSION = "0.8.9", EV_VERSION = 21;
+let versionSentAt = 0, versionToldAt = 0;
+function versionTick(t) {
+  if (t - versionSentAt < 20000) return;
+  versionSentAt = t;
+  sendEvent(EV_VERSION, VERSION);
+}
+function onVersion(text, t) {
+  if (!/^\d+\.\d+\.\d+$/.test(text) || text === VERSION || t - versionToldAt < 60000) return;
+  versionToldAt = t;
+  const num = (v) => v.split(".").reduce((a, n) => a * 1000 + Number(n), 0);
+  say(num(text) > num(VERSION)
+    ? `SA Co-op: your friend has version ${text}, you have ${VERSION}. Close the game and start SA-Coop.exe to update`
+    : `SA Co-op: your friend has an older version (${text}, you have ${VERSION}). They must close the game and start SA-Coop.exe`);
+}
+
 // a mission marker that does nothing says why
 let hostSaveNote = "", refusedAt = 0, refusedCheckAt = 0;
 function refusedTick(t) {
@@ -1657,6 +1677,7 @@ while (true) {
   statsTick(now);
   sharedWorldTick(me, now);
   refusedTick(now);
+  versionTick(now);
   keyHints(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
