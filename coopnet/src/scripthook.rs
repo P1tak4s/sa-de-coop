@@ -51,6 +51,8 @@ const EITHER: &[u32] = &[
 
 pub static PARTNER_PED: AtomicI32 = AtomicI32::new(-1); // script handle of the partner's copy in our world
 pub static PARTNER_NEAR: AtomicBool = AtomicBool::new(false);
+/// The guest's own missions are refused (set by the script: only while the guest is in the host's story).
+pub static GUEST_LOCK: AtomicBool = AtomicBool::new(false);
 /// Why a mission start was just refused, for the script to tell the player: 1 = we are the guest, 2 = the host's
 /// partner is not next to it. Without a word the marker simply did nothing (11-15: "it will not let me in the house").
 pub static REFUSED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
@@ -212,7 +214,9 @@ unsafe extern "C" fn can_start(ped: *mut u8) -> u8 {
     if connected() {
         // one story for both: the guest plays the host's missions, never its own (the host's save is sent to the
         // guest when it joins, so the guest is not left without progress). Only while a host is really there.
-        if !crate::is_host() && crate::coop_friends() > 0 {
+        // ...and only when the guest is in the host's story (the script compares the two games' progress): a guest
+        // that could not load the host's save was left unable to do anything at all (11-15)
+        if !crate::is_host() && crate::coop_friends() > 0 && GUEST_LOCK.load(Ordering::Relaxed) {
             REFUSED.store(1, Ordering::Relaxed);
             return 0;
         }

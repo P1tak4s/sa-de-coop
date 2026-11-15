@@ -15,7 +15,7 @@ if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not fo
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -1037,6 +1037,8 @@ function hearWorld(me) {
     else if (kind === EV_VERSION) onVersion(text, Date.now());
     else if (kind === EV_LOG) log(`[friend] ${text.replace(/`/g, " ")}`);
     else if (kind === EV_DRIVE) onDrive(text);
+    else if (kind === EV_STORY) onStory(text, Date.now());
+    else if (kind === EV_GUNS) onGuns(text);
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
   }
@@ -1820,7 +1822,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.24", EV_VERSION = 21;
+const VERSION = "0.9.0", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -1874,6 +1876,72 @@ function statusTick(t) {
       ` area=${Streaming.GetAreaVisible()}` + (cutOff ? " cutscenes-off" : "");
     sendEvent(EV_LOG, st.replace(/ /g, "`"));
   } catch (e) {}
+}
+
+// ---- the same story, or each their own ------------------------------------------------------------------------------
+// The host sends how far its story is (the game's progress percentage). A guest whose own game is at the same point
+// plays the host's missions and cannot start its own; a guest in another story (it did not load the host's save)
+// keeps its own missions and is told how to get into the host's. Before 11-15 the guest's missions were always
+// refused, and a guest whose "Load Game" showed no host save could do nothing at all.
+const EV_STORY = 24, EV_GUNS = 25;
+let storySentAt = 0, storyToldAt = 0, sameStory = false;
+function storyShareTick(t) {
+  if (isGuest() || t - storySentAt < 10000) return;
+  storySentAt = t;
+  try { sendEvent(EV_STORY, Stat.GetProgressPercentage().toFixed(2)); } catch (e) {}
+}
+function onStory(text, t) {
+  if (!isGuest()) return;
+  const theirs = parseFloat(text);
+  if (!Number.isFinite(theirs)) return;
+  let mine = -1;
+  try { mine = Stat.GetProgressPercentage(); } catch (e) {}
+  const same = Math.abs(mine - theirs) < 0.02;
+  if (same !== sameStory) log(`[sa-coop] story: ${same ? "the same as the host's" : `our own (${mine.toFixed(2)} %, the host ${theirs.toFixed(2)} %)`}`);
+  sameStory = same;
+  try { api.coop_guest_lock(same ? 1 : 0); } catch (e) {}
+  if (!same && (!storyToldAt || t - storyToldAt > 180000)) {
+    storyToldAt = t;
+    say(`SA Co-op: you are in your own story. To play your friend's missions: ${hostSaveNote || "Esc, Load Game, the slot of the host's save"}`);
+  }
+}
+
+// ---- the mission's guns for both ------------------------------------------------------------------------------------
+// A mission hands its tools to the host's CJ only (the spray can of "Tagging Up Turf", 11-15). While on a mission the
+// host sends what it carries; the guest takes what it does not have, with the host's ammo.
+let gunsSentAt = 0, gunsSent = "", gunsWanted = [];
+function gunsTick(me, t) {
+  if (t - gunsSentAt < 2000) return;
+  gunsSentAt = t;
+  try {
+    if (!isGuest() && ONMISSION) {
+      const list = [];
+      for (let id = 1; id <= 46 && list.length < 12; id++) {
+        if (id === 19 || id === 20 || id === 21) continue; // not weapons
+        if (me.hasGotWeapon(id)) list.push(`${id}:${Math.max(1, Math.min(9999, me.getAmmoInWeapon(id)))}`);
+      }
+      const msg = list.join(",");
+      if (msg !== gunsSent) { gunsSent = msg; sendEvent(EV_GUNS, msg || "-"); }
+    } else gunsSent = "";
+    // the guest: what is still waiting for its model
+    gunsWanted = gunsWanted.filter(([id, ammo]) => {
+      if (me.hasGotWeapon(id)) return false;
+      const model = Weapon.GetModel(id);
+      if (model > 0 && !loadModel(model)) return true; // next time
+      me.giveWeapon(id, ammo);
+      if (model > 0) Streaming.MarkModelAsNoLongerNeeded(model);
+      log(`[sa-coop] the mission's weapon ${id} given`);
+      return false;
+    });
+  } catch (e) { err(`[sa-coop] guns: ${e}`); }
+}
+function onGuns(text) {
+  if (!isGuest() || text === "-") return;
+  gunsWanted = [];
+  for (const part of text.split(",")) {
+    const [id, ammo] = part.split(":").map((v) => parseInt(v, 10));
+    if (id >= 1 && id <= 46 && ammo >= 1 && ammo <= 9999) gunsWanted.push([id, ammo]);
+  }
 }
 
 // a mission marker that does nothing says why
@@ -1945,6 +2013,8 @@ while (true) {
   statusTick(now);
   followTick(me, now);
   driveProxyTick(me, now);
+  storyShareTick(now);
+  gunsTick(me, now);
   keyHints(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);

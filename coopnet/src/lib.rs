@@ -434,6 +434,13 @@ impl SaveIn {
     }
 }
 
+/// The guest's script says whether it is in the host's story (1): only then are the guest's own missions refused.
+#[no_mangle]
+pub extern "C" fn coop_guest_lock(on: i64) -> i64 {
+    scripthook::GUEST_LOCK.store(on != 0, std::sync::atomic::Ordering::Relaxed);
+    1
+}
+
 /// A marker file in the data folder: op 1 = create, 2 = delete, 0 = 1 if it is there. A script sets one before
 /// something that might kill the game and clears it after: still there on the next run = it did. (The script cannot
 /// write files itself: CLEO only lets a script do that with [fs] in its file name.)
