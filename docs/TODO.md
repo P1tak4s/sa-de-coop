@@ -46,6 +46,7 @@ Legend:
 - [x] One world: the guest sees the host's people, traffic and police
 - [x] Damage the guest does goes to the host's game
 - [~] People and cars vanishing when the friend crashes into them: logged since 0.9.26, cause not found yet
+- [~] Trains: the host's trains near the guest (0.9.38)
 - [ ] Fire
 - [ ] Pickups
 - [ ] Gang wars

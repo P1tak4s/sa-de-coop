@@ -1339,6 +1339,64 @@ function onRadio(text, me) {
   } catch (e) {}
 }
 
+// ---- trains (11-15: "he never sees the train") ---------------------------------------------------------------------
+// A train is no ordinary car: the shared world leaves them out, so the guest saw no trains at all. The host sends its
+// locomotives near the guest (model, place, speed, direction) four times a second; the guest makes a train of the
+// same kind on the same track (CREATE_MISSION_TRAIN, its own cars behind it), puts it where the host's is and gives
+// it the host's speed. Ideas from CoopAndreas' train sync; written for this game.
+const EV_TRAIN = 36, LOCOS = { 449: 9, 537: 0, 538: 8 }; // locomotive model -> train type (tram, freight, Brown Streak)
+let trainSentAt = 0;
+const guestTrains = new Map(); // host handle -> { train, model, seen }
+function trainTick(me, now) {
+  if (isGuest()) {
+    for (const [h, t] of guestTrains) if (now - t.seen > 3000) { try { t.train.delete(); } catch (e) {} guestTrains.delete(h); }
+    return;
+  }
+  if (now - trainSentAt < 250 || !anyFriend()) return;
+  trainSentAt = now;
+  const around = [];
+  for (const r of remotes) { try { if (r && Char.DoesExist(r.ped)) around.push(r.ped.getCoordinates()); } catch (e) {} }
+  if (!around.length) return;
+  const parts = [];
+  poolEach(WRVA.vehPool, WRVA.vehSize, (h, p) => {
+    const model = Memory.ReadI16(p + WRVA.model, false, false);
+    if (!(model in LOCOS) || parts.length >= 2) return;
+    try {
+      const car = new Car(h), c = car.getCoordinates();
+      if (!around.some((g) => (g.x - c.x) ** 2 + (g.y - c.y) ** 2 < 300 * 300)) return;
+      let dir = 0;
+      try { dir = new Train(h).findDirection() ? 1 : 0; } catch (e) {}
+      parts.push(`${h},${model},${c.x.toFixed(1)},${c.y.toFixed(1)},${c.z.toFixed(1)},${car.getSpeed().toFixed(1)},${dir}`);
+    } catch (e) {}
+  });
+  if (parts.length) sendEvent(EV_TRAIN, parts.join(";"));
+}
+function onTrain(text, me) {
+  if (!isGuest() || !sharedMode) return;
+  for (const part of text.split(";")) {
+    const v = part.split(",").map(Number);
+    if (v.length !== 7 || !v.every(Number.isFinite) || !(v[1] in LOCOS)) continue;
+    const [h, model, x, y, z, speed, dir] = v;
+    try {
+      let t = guestTrains.get(h);
+      if (t && !Car.DoesExist(+t.train)) { guestTrains.delete(h); t = null; }
+      if (!t) {
+        // all the train's models first (asked for, then waited on: never forced, see loadModel)
+        const need = model === 537 ? [537, 569, 590] : model === 538 ? [538, 570] : [449];
+        if (!need.every((m) => loadModel(m))) continue;
+        const train = Train.Create(LOCOS[model], x, y, z, dir === 1);
+        t = { train, model, seen: Date.now() };
+        guestTrains.set(h, t);
+        logx(`[sa-coop] the host's train ${model} shown here`);
+      }
+      t.seen = Date.now();
+      const c = new Car(+t.train).getCoordinates();
+      if ((c.x - x) ** 2 + (c.y - y) ** 2 > 15 * 15) t.train.setCoordinates(x, y, z); // far off: put on its place
+      t.train.setCruiseSpeed(speed);
+    } catch (e) { err(`[sa-coop] train ${model}: ${e}`); }
+  }
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -1384,6 +1442,7 @@ function hearWorld(me) {
     else if (kind === EV_SKIPREQ) onSkipRequest();
     else if (kind === EV_CAM) onCam(text, me);
     else if (kind === EV_RADIO) onRadio(text, me);
+    else if (kind === EV_TRAIN) onTrain(text, me);
     else if (kind === EV_CUTLOAD) onCutLoad(text, me);
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
@@ -2418,7 +2477,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.37", EV_VERSION = 21;
+const VERSION = "0.9.38", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2676,6 +2735,7 @@ while (true) {
   missionsTick(now);
   iconsTick(now);
   radioTick(me, now);
+  trainTick(me, now);
   skipTick();
   camTick(now);
   friendLogTick(now);
