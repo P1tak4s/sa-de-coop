@@ -32,6 +32,21 @@ const EITHER: &[u32] = &[
     0x051C, // HAS_CAR_BEEN_DAMAGED_BY_CHAR
     0x0457, // IS_PLAYER_TARGETTING_CHAR
     0x068C, // IS_PLAYER_TARGETTING_ANYTHING
+    // 11-15, "only one of us can take part in the mission": where the player has to BE. A mission's "go to the
+    // marker", "get to the car", "stand in this area" is now done when either of the two is there, as in Saints Row 2.
+    0x00A3, 0x00A4, // IS_CHAR_IN_AREA_2D / 3D
+    0x00EC, 0x00ED, 0x00EE, 0x00EF, 0x00F0, 0x00F1, // LOCATE_(STOPPED_)CHAR_*_2D
+    0x00F2, 0x00F3, 0x00F4, // LOCATE_CHAR_*_CHAR_2D (next to somebody)
+    0x00FE, 0x00FF, 0x0100, 0x0101, 0x0102, 0x0103, // LOCATE_(STOPPED_)CHAR_*_3D
+    0x0104, 0x0105, 0x0106, // LOCATE_CHAR_*_CHAR_3D
+    0x0154, // IS_CHAR_IN_ZONE
+    0x01A1, 0x01A2, 0x01A3, 0x01A4, 0x01A5, 0x01A6, 0x01A7, 0x01A8, 0x01A9, 0x01AA, // IS_CHAR_(STOPPED_)IN_AREA_*
+    0x0202, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, // LOCATE_CHAR_*_CAR_2D / 3D (next to a car)
+    0x0471, 0x0472, 0x0473, 0x0474, 0x0475, 0x0476, // LOCATE_CHAR_*_OBJECT_2D / 3D
+    0x05F6, 0x05F7, 0x05F8, 0x05F9, 0x05FA, 0x05FB, 0x05FC, 0x05FD, 0x05FE, 0x05FF, 0x0600, 0x0601, // angled areas
+    0x0448, // IS_CHAR_SITTING_IN_CAR
+    0x047A, 0x04A7, 0x04A9, 0x04AB, 0x04C8, // on a bike, in a boat, helicopter, plane, flying vehicle
+    0x0179, 0x023B, 0x0547, 0x0737, // touching an object or vehicle, holding an object
 ];
 
 pub static PARTNER_PED: AtomicI32 = AtomicI32::new(-1); // script handle of the partner's copy in our world
