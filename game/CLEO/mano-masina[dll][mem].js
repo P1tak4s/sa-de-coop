@@ -42,14 +42,18 @@ function remember(car) {
   } catch (e) { log(`[mano-masina] remember: ${e}`); }
 }
 
+// true when done (or nothing to do); false = the model is still loading, call again
+let restoreAskedAt = 0;
 function restore() {
-  if (!load || !load(rec)) return;
+  if (!load || !load(rec)) return true;
   const model = Memory.ReadI32(rec, false, false);
+  // never LOAD_ALL_MODELS_NOW from a script: it crashes the Definitive Edition (see sa-coop). Ask, come back later.
+  if (!Streaming.HasModelLoaded(model)) {
+    if (Date.now() - restoreAskedAt > 3000) { restoreAskedAt = Date.now(); try { Streaming.RequestModel(model); } catch (e) { return true; } }
+    return false;
+  }
   const x = Memory.ReadFloat(rec + 4, false, false), y = Memory.ReadFloat(rec + 8, false, false), z = Memory.ReadFloat(rec + 12, false, false);
   try {
-    Streaming.RequestModel(model);
-    Streaming.LoadAllModelsNow();
-    for (let i = 0; i < 40 && !Streaming.HasModelLoaded(model); i++) wait(25);
     const car = Car.Create(model, x, y, z);
     Streaming.MarkModelAsNoLongerNeeded(model);
     car.setHeading(Memory.ReadFloat(rec + 16, false, false));
@@ -58,6 +62,7 @@ function restore() {
     mine = car;
     log(`[mano-masina] put back car ${model} at ${x.toFixed(0)} ${y.toFixed(0)}`);
   } catch (e) { log(`[mano-masina] restore: ${e}`); }
+  return true;
 }
 
 log("[mano-masina] ready");
@@ -71,7 +76,7 @@ while (true) {
     me = player.getChar();
   } catch (e) { continue; }
 
-  if (!restored) { restored = true; if (!ONMISSION) restore(); }
+  if (!restored) { restored = ONMISSION || restore(); }
 
   if (me.isInAnyCar()) {
     // storeCarIsIn returns -1 on the Definitive Edition; take the car and make it a mission car ourselves

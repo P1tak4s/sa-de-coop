@@ -39,10 +39,13 @@ function writeAscii(text) {
 
 function d2(a, b) { return (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2; }
 
+// never LOAD_ALL_MODELS_NOW from a script: it crashes the Definitive Edition (see sa-coop). Ask, come back later.
+let modelAskedAt = 0;
 function spawn(me) {
-  Streaming.RequestModel(MODEL);
-  Streaming.LoadAllModelsNow();
-  for (let i = 0; i < 40 && !Streaming.HasModelLoaded(MODEL); i++) wait(25);
+  if (!Streaming.HasModelLoaded(MODEL)) {
+    if (Date.now() - modelAskedAt > 3000) { modelAskedAt = Date.now(); Streaming.RequestModel(MODEL); }
+    return;
+  }
   const p = me.getCoordinates();
   // ped type 24 (mission 1): no built-in gang hatred. As a Grove ped (8) he shot every Ballas and Vagos in sight.
   ped = Char.Create(24, MODEL, p.x + 1.5, p.y + 1.5, p.z);

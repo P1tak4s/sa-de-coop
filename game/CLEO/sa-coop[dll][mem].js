@@ -171,11 +171,16 @@ function readRemote() {
   return s;
 }
 
+// Never load a model from here. LOAD_ALL_MODELS_NOW makes the game build the model, its materials and shaders on
+// the script's thread, and the Definitive Edition crashes on that ("Tried to access cooked shader map ID from unknown
+// thread", 11-15; Vice City found the same on 11-08). Ask the game to stream it and use it on a later frame, when the
+// game has loaded it itself: every caller comes back the next frame.
+const requestedAt = {};
 function loadModel(id) {
-  Streaming.RequestModel(id);
-  Streaming.LoadAllModelsNow();
-  for (let i = 0; i < 40 && !Streaming.HasModelLoaded(id); i++) wait(25);
-  return Streaming.HasModelLoaded(id);
+  if (Streaming.HasModelLoaded(id)) return true;
+  const t = Date.now();
+  if (!requestedAt[id] || t - requestedAt[id] > 3000) { requestedAt[id] = t; Streaming.RequestModel(id); }
+  return false;
 }
 
 // Vehicles with flashing lights (police, ambulance, fire, taxi, tow truck, work machines). The game loads their light
@@ -304,18 +309,8 @@ function handleOwnHealth(me, now) {
 // story characters load through their own special slots (290 + slot - 1); creating them directly crashes
 const STORY_LOOKS = ["", "sweet", "ryder", "smoke", "cesar", "kendl", "wuzimu", "truth"];
 function lookModel(slot, look) {
-  const name = STORY_LOOKS[look] || "";
-  if (!name) { const m = SKINS[slot]; return loadModel(m) ? m : 0; }
-  const special = 10 - slot; // slots 10, 9, 8, 7: missions use the low ones first
-  try {
-    // the game's own scripts use upper case names; give the streamer up to 3 s (it was 1 s and fell back silently)
-    Streaming.LoadSpecialCharacter(special, name.toUpperCase());
-    Streaming.RequestModel(290 + special - 1);
-    Streaming.LoadAllModelsNow();
-    for (let i = 0; i < 120 && !Streaming.HasSpecialCharacterLoaded(special); i++) wait(25);
-    if (Streaming.HasSpecialCharacterLoaded(special)) { log(`[sa-coop] look ${name} loaded in slot ${special}`); return 290 + special - 1; }
-    log(`[sa-coop] look ${name}: not loaded after 3 s, using a Grove Street look`);
-  } catch (e) { log(`[sa-coop] look ${name}: ${e}`); }
+  // story characters (Sweet, Ryder...) need LOAD_SPECIAL_CHARACTER, which crashes the Definitive Edition when a
+  // script calls it: everyone gets a Grove Street look until that can be done on the game's own thread
   const m = SKINS[slot];
   return loadModel(m) ? m : 0;
 }
@@ -552,16 +547,16 @@ function downRemote(r, s, slot, me) {
 // their gun in their copy's hands; shooting is shown as shots straight ahead (no hits sync yet)
 function armRemote(r, s, now) {
   if (s.weapon !== r.weapon) {
-    r.weapon = s.weapon;
     try {
+      const model = s.weapon > 0 ? Weapon.GetModel(s.weapon) : 0;
+      if (model > 0 && !loadModel(model)) return; // the gun appears once the game has loaded it
+      r.weapon = s.weapon;
       if (s.weapon > 0) {
-        const model = Weapon.GetModel(s.weapon);
-        if (model > 0) loadModel(model);
         r.ped.giveWeapon(s.weapon, 9999);
         if (model > 0) Streaming.MarkModelAsNoLongerNeeded(model);
       }
       r.ped.setCurrentWeapon(s.weapon);
-    } catch (e) { log(`[sa-coop] weapon ${s.weapon}: ${e}`); }
+    } catch (e) { r.weapon = s.weapon; log(`[sa-coop] weapon ${s.weapon}: ${e}`); }
   }
   if ((s.flags & 2) && s.inCar === 0 && s.weapon > 15 && now - (r.lastShot || 0) > 300) {
     const h = s.heading * Math.PI / 180;
