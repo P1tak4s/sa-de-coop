@@ -182,9 +182,11 @@ fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::
     let set = |out: &mut Vec<String>, i: usize, v: f32| out[i] = format!("{v:.3}");
     if grip {
         // 2 turn mass (lower = turns in quicker; 0.7 spun cars out), 8 traction (more grip all round; moving the bias
-        // to the front made the rear slide), 9 traction loss (lower = slides less), 13 acceleration, 17 brakes,
-        // 20 steering lock, 22 damping. 11-15: "faster and better handling": more grip and brakes for 300 km/h.
-        for (i, k, max) in [(2, 0.85, 50000.0), (8, 1.35, 2.5), (9, 0.85, 1.0), (13, 1.25, 100.0), (17, 1.4, 20.0), (20, 1.15, 45.0), (22, 1.2, 1.0)] {
+        // to the front made the rear slide), 9 traction loss = grip left while braking or sliding (0.9.46 lowered it
+        // and the wheels locked: "there are no brakes"; now higher), 13 acceleration, 17 brakes,
+        // 20 steering lock, 22 damping. 11-15: "faster and better handling": more grip and brakes for 300 km/h; brakes
+        // x1.4 were too weak at that speed ("there are no brakes"), now x1.8.
+        for (i, k, max) in [(2, 0.85, 50000.0), (8, 1.35, 2.5), (9, 1.12, 1.0), (13, 1.25, 100.0), (17, 1.8, 25.0), (20, 1.15, 45.0), (22, 1.2, 1.0)] {
             if let Some(v) = num(&out, i) {
                 set(&mut out, i, (v * k).min(max));
             }
