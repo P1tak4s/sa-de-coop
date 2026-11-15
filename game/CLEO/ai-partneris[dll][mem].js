@@ -220,19 +220,29 @@ function chauffeurKey(me) {
 
 // name tag over the partner's head (same drawing as the co-op script: the game's text, by key)
 try { FxtStore.insert("COOPAI", "AI partner"); } catch (e) {}
-// world point -> the 640 x 448 screen the game's text uses, by the game's own CSprite::CalcScreenCoors
-// (RVA 0x1277370, Steam build 1.0.113.49697469); null when behind the camera or too far
-const CALC_SCREEN = Memory.Fn.X64U8(0x1277370, true);
+// world point -> the 640 x 448 screen the game's text uses; null when behind the camera or far away.
+// From the camera's place, where it looks and its field of view. The game's own CSprite::CalcScreenCoors (used from
+// 11-08) showed no name at all in the first two-player test (11-15), so this is the projection that was seen working,
+// with the widescreen maths put right: the game's FOV is the horizontal one of a 4:3 picture and a wider screen
+// shows more at the sides (the first version treated it as the 16:9 one, so names slid away from the middle).
 const SCREEN_W = 0x531B218, SCREEN_H = 0x531B21C;
-const projIn = Memory.Allocate(16), projOut = Memory.Allocate(16);
 function toScreen(p) {
-  Memory.WriteFloat(projIn, p.x, false, false); Memory.WriteFloat(projIn + 4, p.y, false, false); Memory.WriteFloat(projIn + 8, p.z, false, false);
-  if (!CALC_SCREEN(projIn, projOut, 0, 0)) return null;
-  const depth = Memory.ReadFloat(projOut + 8, false, false);
-  if (depth > 80) return null;
-  const w = Memory.ReadI32(SCREEN_W, false, true), h = Memory.ReadI32(SCREEN_H, false, true);
-  if (w <= 0 || h <= 0) return null;
-  const sx = Memory.ReadFloat(projOut, false, false) * 640 / w, sy = Memory.ReadFloat(projOut + 4, false, false) * 448 / h;
+  const cam = Camera.GetActiveCoordinates(), at = Camera.GetActivePointAt();
+  let fx = at.x - cam.x, fy = at.y - cam.y, fz = at.z - cam.z;
+  const fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1; fx /= fl; fy /= fl; fz /= fl;
+  let rx = fy, ry = -fx; const rl = Math.sqrt(rx * rx + ry * ry) || 1; rx /= rl; ry /= rl; // right = forward x up
+  const ux = ry * fz, uy = -rx * fz, uz = rx * fy - ry * fx;                                 // up = right x forward
+  const dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
+  const depth = dx * fx + dy * fy + dz * fz;
+  if (depth < 1 || depth > 80) return null;
+  let aspect = 16 / 9;
+  try {
+    const w = Memory.ReadI32(SCREEN_W, false, true), h = Memory.ReadI32(SCREEN_H, false, true);
+    if (w >= 640 && w <= 8000 && h >= 360 && h <= 5000 && w / h > 1.2 && w / h < 4) aspect = w / h;
+  } catch (e) {}
+  const tanY = Math.tan((Camera.GetFov() * Math.PI / 180) / 2) * 0.75, tanX = tanY * aspect;
+  const sx = 320 + ((dx * rx + dy * ry) / depth / tanX) * 320;
+  const sy = 224 - ((dx * ux + dy * uy + dz * uz) / depth / tanY) * 224;
   return sx < 0 || sx > 640 || sy < 0 || sy > 448 ? null : { x: sx, y: sy - 8 }; // text is drawn from its top
 }
 function drawTag() {
