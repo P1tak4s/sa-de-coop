@@ -19,6 +19,12 @@ function logx(text) {
   log(text);
   try { if (friendLog.length < 60 && !/name \d+:|world: sending|^\[friend\]/.test(text)) friendLog.push(String(text)); } catch (e) {}
 }
+// The building a character is in. GET_CHAR_AREA_VISIBLE does not check its handle: with a character that is not
+// there at that moment the game read from address 0x57 and died (crash of 11-15 17:17, the handler at 0x10D1D82).
+// try/catch cannot catch that, so the handle is checked first. Never call getAreaVisible() directly.
+function areaOf(ch) {
+  try { return ch && +ch > 0 && Char.DoesExist(+ch) ? ch.getAreaVisible() : 0; } catch (e) { return 0; }
+}
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
@@ -295,7 +301,7 @@ function writeMine(me) {
   Memory.WriteI32(mine + I.health, downed ? -1 : me.getHealth(), false, false);
   Memory.WriteI32(mine + I.carHealth, carHealth, false, false);
   let area = 0;
-  try { area = me.getAreaVisible(); } catch (e) {}
+  try { area = areaOf(me); } catch (e) {}
   Memory.WriteI32(mine + I.interior, area, false, false);
   const t = Clock.GetTimeOfDay();
   Memory.WriteI32(mine + I.clock, t.hours * 60 + t.minutes, false, false);
@@ -1102,7 +1108,7 @@ function followTick(me, now) {
   if (unfreezeAt && now > unfreezeAt) { unfreezeAt = 0; try { me.freezePosition(false); } catch (e) {} }
   if (downed) return;
   try {
-    const mine = me.getAreaVisible(), p = me.getCoordinates();
+    const mine = areaOf(me), p = me.getCoordinates();
     if (mine !== 0) doorArmed = false; // indoors: whatever door we come out by does not count until we walk away
     for (const r of remotes) {
       if (!r || !Char.DoesExist(r.ped) || r.down) continue;
@@ -1186,7 +1192,7 @@ function onFriendMission(text, me) {
   if (!started) return;
   try {
     const f = nearestFriend(me);
-    const far = !f || dist2(me.getCoordinates(), f.r.ped.getCoordinates()) > 30 * 30 || me.getAreaVisible() !== (f.r.area || 0);
+    const far = !f || dist2(me.getCoordinates(), f.r.ped.getCoordinates()) > 30 * 30 || areaOf(me) !== (f.r.area || 0);
     if (isGuest() && f && far && !downed) { jumpToFriend(me); say("SA Co-op: your friend started a mission: you were taken to them"); }
     else say(isGuest() ? "SA Co-op: your friend started a mission" : "SA Co-op: your friend started a mission. Press J to join them");
   } catch (e) { err(`[sa-coop] mission start: ${e}`); }
@@ -1553,7 +1559,7 @@ function lockGuestStory() {
   return;
   // inside a building (a safehouse with its save disk) the lock is off, so the guest can save its own game
   let inside = false;
-  try { inside = player.getChar().getAreaVisible() !== 0; } catch (e) {}
+  try { inside = areaOf(player.getChar()) !== 0; } catch (e) {}
   if (isGuest() && !inside) {
     if (Memory.ReadI32(a, false, true) !== 1) Memory.WriteI32(a, 1, false, true);
     if (!guestLocked) { guestLocked = true; say("SA Co-op: you play your friend's story. You can save in your own safehouses"); }
@@ -1766,7 +1772,7 @@ function tellPartner(me) {
     handle = +r.ped;
     try {
       const a = me.getCoordinates(), b = r.ped.getCoordinates();
-      const same = me.getAreaVisible() === (r.area || 0);
+      const same = areaOf(me) === (r.area || 0);
       near = same && (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2 < 25 * 25 ? 1 : 0; // 25 m (was 6)
     } catch (e) {}
     break;
@@ -1845,13 +1851,13 @@ function tracked(h) { try { return api.coop_tracked(h) === 1; } catch (e) { retu
 // own, with its own cars next to the host's ("the cars are still doubled for him").
 function outside() {
   try { if (Streaming.GetAreaVisible() === 0) return true; } catch (e) { return true; }
-  try { return player.getChar().getAreaVisible() === 0; } catch (e) { return false; }
+  try { return areaOf(player.getChar()) === 0; } catch (e) { return false; }
 }
 // ...and the shown area is put right when it stays wrong for 3 s (not during a cutscene, which sets it on purpose)
 let areaOddSince = 0;
 function areaTick(me, t) {
   try {
-    const shown = Streaming.GetAreaVisible(), own = me.getAreaVisible();
+    const shown = Streaming.GetAreaVisible(), own = areaOf(me);
     // only a guest (a host's mission shows rooms on purpose), and never while any cutscene runs
     if (shown === own || playingCut || !isGuest() || Memory.ReadU8(RVA.cutRunning, false, true) === 1) { areaOddSince = 0; return; }
     if (!areaOddSince) { areaOddSince = t; return; }
@@ -2186,7 +2192,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.14", EV_VERSION = 21;
+const VERSION = "0.9.15", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2244,7 +2250,7 @@ function statusTick(t) {
   statusSentAt = t;
   try {
     const st = `S:v${VERSION}` + (isGuest() ? ` guest shared=${sharedMode ? 1 : 0}` : " host") + ` copies=${worldProxies.size} mission=${proxies.size}` +
-      ` area=${Streaming.GetAreaVisible()}/${player.getChar().getAreaVisible()}` + (cutOff ? " cutscenes-off" : "");
+      ` area=${Streaming.GetAreaVisible()}/${areaOf(player.getChar())}` + (cutOff ? " cutscenes-off" : "");
     sendEvent(EV_LOG, st.replace(/ /g, "`"));
   } catch (e) {}
 }

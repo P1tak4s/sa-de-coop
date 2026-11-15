@@ -409,7 +409,7 @@ while (true) {
   // warp next to CJ only when running can't fix it: another interior (a cutscene or a door moved CJ), or more than
   // 120 m behind and out of sight. While you can see him, he runs (he used to warp at 40 m, even mid-run).
   let otherArea = false, seen = true;
-  try { otherArea = ped.getAreaVisible() !== Streaming.GetAreaVisible(); } catch (e) {}
+  try { otherArea = Char.DoesExist(+ped) && ped.getAreaVisible() !== Streaming.GetAreaVisible(); } catch (e) {} // the handle is checked first: the game does not (crash of 11-15)
   try { const q = ped.getCoordinates(); q.z += 1.0; seen = toScreen(q) !== null; } catch (e) {}
   const far = d2(me.getCoordinates(), ped.getCoordinates());
   if (!me.isInAnyCar() && !ped.isInAnyCar() && (otherArea || (far > 120 * 120 && !seen) || far > 300 * 300)) {
