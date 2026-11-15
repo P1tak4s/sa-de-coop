@@ -747,8 +747,9 @@ function playCutscene(text, me) {
     if (placed) {
       myArea = Streaming.GetAreaVisible();
       Streaming.SetAreaVisible(area);
+      // only ask: LOAD_SCENE makes the game build the place on the script's thread, and the Definitive Edition
+      // crashes on that ("AssembleReferenceTokenStream for BP_ProceduralInteriorProp ... non-game thread", 11-15)
       Streaming.RequestCollision(at.x, at.y);
-      Streaming.LoadScene(at.x, at.y, at.z);
       changed = true;
     }
     try { Text.ClearHelp(); } catch (e) {}
@@ -760,7 +761,7 @@ function playCutscene(text, me) {
       wait(100);
       try {
         const c = Camera.GetActiveCoordinates();
-        if (!Cutscene.HasFinished() && Math.abs(c.x) < 6000 && Math.abs(c.y) < 6000) { Streaming.RequestCollision(c.x, c.y); Streaming.LoadScene(c.x, c.y, c.z); }
+        if (!Cutscene.HasFinished() && Math.abs(c.x) < 6000 && Math.abs(c.y) < 6000) Streaming.RequestCollision(c.x, c.y);
       } catch (e) { log(`[sa-coop] cutscene ${name}, scene: ${e}`); }
       while (!Cutscene.HasFinished()) wait(0);
     }
@@ -771,7 +772,6 @@ function playCutscene(text, me) {
       Streaming.SetAreaVisible(myArea);
       const p = me.getCoordinates();
       Streaming.RequestCollision(p.x, p.y);
-      Streaming.LoadScene(p.x, p.y, p.z);
     } catch (e) { log(`[sa-coop] cutscene ${name}, back: ${e}`); }
   }
   playingCut = false;
@@ -1076,8 +1076,7 @@ function jumpToFriend(me) {
       else { attachOutside(me, r.car); ridingOutside = { car: r.car, slot: f.slot }; }
     } else {
       const c = r.ped.getCoordinates();
-      Streaming.RequestCollision(c.x, c.y);
-      Streaming.LoadScene(c.x, c.y, c.z);
+      Streaming.RequestCollision(c.x, c.y); // no LOAD_SCENE: it crashes the Definitive Edition from a script
       me.setCoordinates(c.x + 1.5, c.y + 1, c.z);
     }
     farSince = 0;
