@@ -198,7 +198,13 @@ impl ImguiRenderLoop for CoopMenu {
                     y += ROW_H;
                     toggle(y, 2, "Longer gun range", &mut o.range);
                     y += ROW_H;
-                    toggle(y, 3, "Tougher enemies", &mut o.tough);
+                    // enemies: normal, tougher, hard (cycles)
+                    if row_bg(y, 3, "Enemies") {
+                        (o.tough, o.hard) = match (o.tough, o.hard) { (false, _) => (true, false), (true, false) => (true, true), _ => (false, false) };
+                    }
+                    let v = format!("<  {}  >", if o.hard { "Hard" } else if o.tough { "Tougher" } else { "Normal" });
+                    let ts = ui.calc_text_size(&v);
+                    dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &v);
                     y += ROW_H;
                     if row_bg(y, 4, "Graphics") {
                         o.gfx = (o.gfx + 1) % 4;
@@ -218,7 +224,7 @@ impl ImguiRenderLoop for CoopMenu {
                         let note = if crate::modsettings::pending() {
                             "Saved. Applied when you close the game; you'll see it next time you play."
                         } else {
-                            "Tougher enemies changes at once. The rest applies after a game restart."
+                            "Enemies change at once. The rest applies after a game restart."
                         };
                         dl.add_text([origin[0] + 26.0, y + 20.0], [0.98, 0.90, 0.40, 1.0], note);
                     }
@@ -536,12 +542,19 @@ unsafe extern "system" fn detour(this: *mut u8, func: *mut u8, parms: *mut u8) {
                 // measured 11-08: title menu buttons are UI_Button_MainMenu_SA_C (co-op = 4), pause menu buttons
                 // UI_Button_Menu_SA_C (co-op = 7); the owning menu is not reachable through the outer chain
                 let pause_btn = cls == "UI_Button_Menu_SA_C";
-                let hit = (menu.contains("MainMenu") || (menu.is_empty() && main_btn)) && value == 4
-                    // MenuPatch inserts co-op at exit's place, so in the pause menu co-op = 7 and exit = 8. For a
-                    // few versions this said 7 (0.9.6 to 0.9.15) and the co-op entry did nothing: the log shows it answers 8. The entry itself
-                    // also calls CustomFunctionFromString("COOP") above.
-                    || (menu.contains("PauseMenu") || (menu.is_empty() && pause_btn)) && value == 8;
-                crate::log_line(&format!("click on {cls} value={value} menu={menu} coop={hit}"));
+                // In the pause menu the number tells nothing: "Exit game" answers 8 and the co-op entry 0, like
+                // other entries (log of 11-15 17:4x: 8 was followed by the exit confirmation). The co-op entry is
+                // known by its own string, the "COOP" MenuPatch gave it (FunctionToCallOnPress).
+                let mut strs = String::new();
+                let pause_coop = pause_btn && {
+                    let props = string_props(this);
+                    for (k, v) in props.iter().take(6) {
+                        strs.push_str(&format!(" {k}={v}"));
+                    }
+                    props.iter().any(|(_, v)| v == "COOP")
+                };
+                let hit = (menu.contains("MainMenu") || (menu.is_empty() && main_btn)) && value == 4 || pause_coop;
+                crate::log_line(&format!("click on {cls} value={value} menu={menu} coop={hit}{strs}"));
                 if hit {
                     OPEN.store(true, Ordering::SeqCst);
                 }

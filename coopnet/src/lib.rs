@@ -973,7 +973,7 @@ pub extern "C" fn coop_setting(id: i64) -> i64 {
     match id {
         0 => overlay::FRIENDLY_FIRE.load(SeqCst) as i64,
         1 => overlay::REVIVE_SECS.load(SeqCst) as i64,
-        2 => modsettings::get().tough as i64,
+        2 => { let o = modsettings::get(); if !o.tough { 0 } else if o.hard { 2 } else { 1 } } // enemies: 0 normal, 1 tougher, 2 hard
         _ => -1,
     }
 }

@@ -11,6 +11,7 @@ pub struct Opts {
     pub fast: bool,
     pub range: bool,
     pub tough: bool,
+    pub hard: bool, // with tough: the hard level. Kept in enemies.txt: the installer rewrites cars.txt
     pub gfx: u8, // 0 off, 1 balanced, 2 high, 3 ultra
     pub dlss: bool,
 }
@@ -21,11 +22,16 @@ fn file() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join(r"sa-de-coop\cars.txt")
 }
 
+fn hard_file() -> std::path::PathBuf {
+    file().with_file_name("enemies.txt")
+}
+
 fn read() -> Opts {
     let t = std::fs::read_to_string(file()).unwrap_or_default();
     let flag = |k: &str| t.lines().any(|l| l.trim() == format!("{k}=1"));
     let gfx = t.lines().find_map(|l| l.trim().strip_prefix("gfx=")?.parse::<u8>().ok()).unwrap_or(2).min(3);
-    Opts { grip: flag("grip"), fast: flag("fast"), range: flag("range"), tough: flag("tough"), gfx, dlss: flag("dlss") }
+    let hard = std::fs::read_to_string(hard_file()).unwrap_or_default().trim() == "hard=1";
+    Opts { grip: flag("grip"), fast: flag("fast"), range: flag("range"), tough: flag("tough"), hard, gfx, dlss: flag("dlss") }
 }
 
 fn state() -> &'static Mutex<Option<Opts>> {
@@ -52,7 +58,10 @@ pub fn set(o: Opts) {
             o.grip as u8, o.fast as u8, o.range as u8, o.tough as u8, o.gfx, o.dlss as u8
         ),
     );
-    let needs_restart = Opts { tough: before.tough, ..o } != before;
+    let _ = std::fs::write(hard_file(), if o.hard { "hard=1
+" } else { "hard=0
+" });
+    let needs_restart = Opts { tough: before.tough, hard: before.hard, ..o } != before;
     if needs_restart {
         start_helper();
     }
