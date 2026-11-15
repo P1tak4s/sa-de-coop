@@ -434,6 +434,12 @@ impl SaveIn {
     }
 }
 
+/// Why the game was just told "no mission now" (0 = it was not): 1 guest, 2 the host's partner is not near. Read once.
+#[no_mangle]
+pub extern "C" fn coop_take_refused() -> i64 {
+    scripthook::REFUSED.swap(0, std::sync::atomic::Ordering::Relaxed) as i64
+}
+
 /// 1 when some script of the mod made this ped or car and keeps it (the AI partner, a kept car, a copy).
 #[no_mangle]
 pub extern "C" fn coop_tracked(handle: i64) -> i64 {

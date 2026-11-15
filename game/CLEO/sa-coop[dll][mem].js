@@ -15,7 +15,7 @@ if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not fo
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -841,7 +841,7 @@ function hearWorld(me) {
     } else if (kind === EV_PHIT) onFriendlyHit(me, text);
     else if (kind === EV_STATS) onStats(text);
     else if (kind === EVW.HIT || kind === EVW.TAKE) onWorldEvent(kind, text);
-    else if (kind === EV_NOTE) say(`SA Co-op: ${text}`);
+    else if (kind === EV_NOTE) { hostSaveNote = text; say(`SA Co-op: ${text}`); }
     else if (kind === 6 || kind === 7) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
@@ -1191,7 +1191,7 @@ function tellPartner(me) {
     try {
       const a = me.getCoordinates(), b = r.ped.getCoordinates();
       const same = me.getAreaVisible() === (r.area || 0);
-      near = same && (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2 < 36 ? 1 : 0;
+      near = same && (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2 < 25 * 25 ? 1 : 0; // 25 m (was 6)
     } catch (e) {}
     break;
   }
@@ -1554,6 +1554,19 @@ function leaveSharedWorld() {
   sharedMode = false;
   setPopulation(true);
 }
+// a mission marker that does nothing says why
+let hostSaveNote = "", refusedAt = 0, refusedCheckAt = 0;
+function refusedTick(t) {
+  if (t - refusedCheckAt < 1000) return;
+  refusedCheckAt = t;
+  let why = 0;
+  try { why = api.coop_take_refused(); } catch (e) {}
+  if (!why || t - refusedAt < 8000) return;
+  refusedAt = t;
+  if (why === 2) say("SA Co-op: your friend must be next to you to start a mission");
+  else say(`SA Co-op: you play your friend's story, not your own. ${hostSaveNote || "Load the host's save: Esc, Load Game"}`);
+}
+
 function sharedWorldTick(me, t) {
   try {
     if (!anyFriend()) { leaveSharedWorld(); return; }
@@ -1603,6 +1616,7 @@ while (true) {
   hearWorld(me);
   statsTick(now);
   sharedWorldTick(me, now);
+  refusedTick(now);
   keyHints(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
