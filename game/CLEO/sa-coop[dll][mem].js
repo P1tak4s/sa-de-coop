@@ -555,8 +555,11 @@ function rideRemote(r, s, mySlot, me) {
   if (r.ped.isInAnyCar() || (r.outside && +r.outside === +car)) return;
   try {
     // their seat here may hold someone else (Sweet in a mission): then they ride outside, nobody is pulled out
-    const seat = s.carHealth;
-    const free = seat !== SEAT_OUTSIDE && seat >= 0 && car.isPassengerSeatFree(seat);
+    let seat = s.carHealth;
+    let free = seat !== SEAT_OUTSIDE && seat >= 0 && car.isPassengerSeatFree(seat);
+    // their seat is taken or is not there in this car (their copy of it can have more doors than the real one):
+    // any other free seat before the trunk (11-15: a friend sat through the roof of a car with empty seats)
+    if (!free && seat !== SEAT_OUTSIDE) { const other = freeSeat(car); if (other >= 0) { seat = other; free = true; } }
     if (free) r.ped.warpIntoCarAsPassenger(car, seat);
     else { attachOutside(r.ped, car); r.outside = car; }
   } catch (e) { err(`[sa-coop] passenger: ${e}`); }
@@ -1817,7 +1820,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.23", EV_VERSION = 21;
+const VERSION = "0.8.24", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
