@@ -63,12 +63,13 @@ Your friend does the same on their PC. The full walkthrough is in [Install (step
 | **AI partner** | Playing alone? A Grove Street partner follows you, rides in the back, fights rival gangs, revives you and can drive you to your waypoint. Decisions come from TypeSafe Jev or OpenAI with your own key. |
 | **Better graphics** | Presets from Balanced to Ultra: higher render resolution, ambient occlusion, reflections, sharper and longer shadows. An optional ReShade look is included. |
 | **Better car handling** | Optional: more grip, stronger brakes, a bit more pull and less body roll, built from your own game files. |
-| **Faster cars** | Optional: every road car and motorbike can reach at least 200 km/h, with the pull to get there. Boats, planes, trains and bicycles stay as they are. |
+| **Faster cars** | Optional: every road car and motorbike can reach at least 260 km/h, with the pull to get there. Boats, planes, trains and bicycles stay as they are. |
 | **Harder fights** | Optional: guns reach 60% further, and armed enemies aim better, shoot more often and take more hits. |
 | **Session settings** | The host picks **friendly fire** (off or on) and the **revive time** (30 or 60 seconds) in the co-op menu; they apply to everyone in the session. |
 | **Settings in the game** | The co-op menu has a **Settings** tab with every option above plus graphics and DLSS. Tougher enemies changes at once; the rest is applied when you close the game. |
 | **Latest NVIDIA DLSS** | Optional: swaps the game's DLSS 2.3.4 (2021) for NVIDIA's newest, downloaded from NVIDIA. Turn DLSS on in the game's Graphics settings. RTX cards only. |
 | **Host on your PC** | No Steam session needed: **Host on my PC** gives a short code like `K3M9-QX2`; your friend types it with your password. Needs UDP port 7790 open (the mod tries UPnP). |
+| **Updates itself** | `SA-Coop.exe` asks GitHub for a newer release when it starts, checks the download against the checksum in the release notes, replaces itself and puts the new files into the game. |
 | **Safe for your saves** | Co-op saves live apart from your own story, with automatic backups. **Uninstall** removes everything the mod added. |
 
 **Not yet, or not tested:** full mission sync for two real players (shared enemies and money), your friend wearing

@@ -191,7 +191,7 @@ impl ImguiRenderLoop for CoopMenu {
                     };
                     toggle(y, 0, "Better car handling", &mut o.grip);
                     y += ROW_H;
-                    toggle(y, 1, "Faster cars (200 km/h)", &mut o.fast);
+                    toggle(y, 1, "Faster cars (260 km/h)", &mut o.fast);
                     y += ROW_H;
                     toggle(y, 2, "Longer gun range", &mut o.range);
                     y += ROW_H;

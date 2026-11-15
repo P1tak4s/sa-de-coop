@@ -153,10 +153,10 @@ fn install(game: &Path) -> Result<Vec<String>, String> {
 
 // ---- car tuning: the game's own handling.cfg, retuned on this PC, packed as coopcars_P.pak ---------------------
 // Better handling: turns in quicker (more steering lock, less turn mass), more grip, stronger brakes, more pull, less wobble.
-// Faster cars: top speed at least 200 for road cars and motorbikes, with the pull to get there.
+// Faster cars: top speed at least 260 for road cars and motorbikes, with the pull to get there.
 // Both players should pick the same. The choice is remembered in %LOCALAPPDATA%\sa-de-coop\cars.txt.
 const HANDLING: &str = "Gameface/Content/OriginalData/GTASA/data/handling.cfg";
-const FAST_TOP_SPEED: f32 = 200.0;
+const FAST_TOP_SPEED: f32 = 260.0;
 /// Not made faster: trains, RC toys, bicycles and work machines (boats and aircraft are found in the file itself).
 const NOT_FAST: [&str; 19] = [
     "FREIGHT", "STREAK", "TRAM", "FREIFLAT", "STREAKC", "RCBANDIT", "RCTIGER", "RCCAM", "BIKE", "BMX", "MTBIKE",
@@ -744,6 +744,146 @@ fn uninstall(game: &Path) -> Vec<String> {
     vec!["Mod removed. Your saves are untouched.".into(), g, d]
 }
 
+// ---- self-update: the newest release on GitHub replaces this exe and its files folder ------------------------
+// Only from this project's own releases, over HTTPS, and only a zip whose SHA-256 matches the one in the release
+// notes. The certutil and tar that come with Windows do the hashing and unpacking (no extra libraries).
+const RELEASES_API: &str = "https://api.github.com/repos/P1tak4s/sa-de-coop/releases?per_page=1";
+const DOWNLOAD_PREFIX: &str = "https://github.com/P1tak4s/sa-de-coop/releases/download/";
+
+fn version_of(s: &str) -> Option<(u32, u32, u32)> {
+    let mut it = s.trim().trim_start_matches('v').split('.').map(|p| p.parse::<u32>().ok());
+    Some((it.next()??, it.next()??, it.next()??))
+}
+
+/// The string value of `"key"` in a JSON text (first one; fine for tags and URLs, which have no escapes).
+fn json_str<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let at = text.find(&format!("\"{key}\""))? + key.len() + 2;
+    let rest = text[at..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    Some(&rest[..rest.find('"')?])
+}
+
+struct Update {
+    version: String,
+    url: String,
+    sha256: String,
+}
+
+/// The newest release, if it is newer than `mine` and has what a safe update needs (our zip and its hash).
+fn find_update(json: &str, mine: &str) -> Option<Update> {
+    let tag = json_str(json, "tag_name")?;
+    if version_of(tag)? <= version_of(mine)? {
+        return None;
+    }
+    let url = json_str(json, "browser_download_url")?;
+    if !url.starts_with(DOWNLOAD_PREFIX) || !url.ends_with("-windows-x64.zip") {
+        return None;
+    }
+    const MARK: &str = "SHA-256 of the zip: `";
+    let hash = json.get(json.find(MARK)? + MARK.len()..)?.get(..64)?;
+    if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(Update { version: tag.trim_start_matches('v').to_string(), url: url.to_string(), sha256: hash.to_ascii_uppercase() })
+}
+
+fn system_tool(name: &str) -> PathBuf {
+    PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into())).join("System32").join(name)
+}
+
+fn check_update() -> Option<Update> {
+    let resp = ureq::get(RELEASES_API).set("User-Agent", "sa-coop-launcher").timeout(std::time::Duration::from_secs(10)).call().ok()?;
+    let mut json = String::new();
+    std::io::Read::read_to_string(&mut std::io::Read::take(resp.into_reader(), 2_000_000), &mut json).ok()?;
+    find_update(&json, env!("CARGO_PKG_VERSION"))
+}
+
+/// Download, check and unpack the release, then swap the files folder and this exe (the old exe is kept as .old
+/// until the next start: Windows lets a running exe be renamed, not overwritten).
+fn apply_update(u: &Update) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    let here = me.parent().ok_or("no folder")?.to_path_buf();
+    let tmp = std::env::temp_dir().join("sa-coop-update");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("x")).map_err(|e| e.to_string())?;
+    let zip = tmp.join("update.zip");
+    let resp = ureq::get(&u.url).set("User-Agent", "sa-coop-launcher").timeout(std::time::Duration::from_secs(300)).call().map_err(|e| format!("download failed ({e})"))?;
+    let mut file = std::fs::File::create(&zip).map_err(|e| e.to_string())?;
+    std::io::copy(&mut std::io::Read::take(resp.into_reader(), 300_000_000), &mut file).map_err(|e| format!("download failed ({e})"))?;
+    drop(file);
+    let out = std::process::Command::new(system_tool("certutil.exe")).arg("-hashfile").arg(&zip).arg("SHA256")
+        .creation_flags(0x0800_0000).output().map_err(|e| format!("could not check the download ({e})"))?;
+    let got = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.replace(' ', "").to_ascii_uppercase())
+        .find(|l| l.len() == 64 && l.chars().all(|c| c.is_ascii_hexdigit()));
+    if got.as_deref() != Some(u.sha256.as_str()) {
+        return Err("the download did not match the checksum in the release notes, nothing changed".into());
+    }
+    let ok = std::process::Command::new(system_tool("tar.exe")).arg("-xf").arg(&zip).arg("-C").arg(tmp.join("x"))
+        .creation_flags(0x0800_0000).status().map(|s| s.success()).unwrap_or(false);
+    let new = tmp.join(r"x\SA-Coop");
+    if !ok || !new.join("SA-Coop.exe").is_file() || !new.join(r"files\game\coopnet64.asi").is_file() {
+        return Err("could not unpack the download, nothing changed".into());
+    }
+    copy_tree(&new.join("files"), &here.join("files"), &mut vec![]).map_err(|e| format!("could not copy the new files ({e})"))?;
+    let old = me.with_extension("exe.old");
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(&me, &old).map_err(|e| format!("could not replace the program ({e})"))?;
+    if let Err(e) = std::fs::copy(new.join("SA-Coop.exe"), &me) {
+        let _ = std::fs::rename(&old, &me);
+        return Err(format!("could not replace the program ({e})"));
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(())
+}
+
+/// What the window shows about updating.
+#[derive(Clone, PartialEq)]
+enum Upd {
+    Idle,
+    Working(String),
+    Done(String),
+    Failed(String),
+}
+
+/// Runs once at start, in the background. Only for the downloaded package (SA-Coop.exe beside its files folder):
+/// not for the helper copy in the game folder and not for a development build.
+fn start_update(state: std::sync::Arc<std::sync::Mutex<Upd>>, ctx: egui::Context) {
+    let packaged = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(r"files\game").is_dir())).unwrap_or(false);
+    if !packaged || std::env::args().any(|a| a == "--updated") {
+        return; // --updated: we were just replaced; never loop if the exe in a release reports an older version
+    }
+    std::thread::spawn(move || {
+        let Some(u) = check_update() else { return };
+        *state.lock().unwrap() = Upd::Working(u.version.clone());
+        ctx.request_repaint();
+        let r = apply_update(&u);
+        *state.lock().unwrap() = match r {
+            Ok(()) => Upd::Done(u.version),
+            Err(e) => Upd::Failed(format!("Could not update to v{}: {e}. You can download it from GitHub.", u.version)),
+        };
+        ctx.request_repaint();
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const JSON: &str = r#"[{"tag_name": "v0.6.2", "prerelease": true, "assets": [{"browser_download_url": "https://github.com/P1tak4s/sa-de-coop/releases/download/v0.6.2/SA-Coop-0.6.2-windows-x64.zip"}], "body": "notes\r\nSHA-256 of the zip: `7079C543A50068CAA6C19FCED74C070FF0F4DB4D336A37E6394CFB8E4E8DB55C`"}]"#;
+
+    #[test]
+    fn update_only_when_newer_and_from_our_releases() {
+        let u = find_update(JSON, "0.6.1").expect("newer");
+        assert_eq!(u.version, "0.6.2");
+        assert_eq!(u.sha256.len(), 64);
+        assert!(find_update(JSON, "0.6.2").is_none()); // same version
+        assert!(find_update(JSON, "0.10.0").is_none()); // numbers, not text: 0.10 is newer than 0.6
+        assert!(find_update(&JSON.replace("github.com/P1tak4s", "github.com/someone"), "0.6.1").is_none());
+        assert!(find_update(&JSON.replace("SHA-256 of the zip", "hash"), "0.6.1").is_none());
+        assert!(find_update(&JSON.replace("7079C5", "ZZZZZZ"), "0.6.1").is_none());
+    }
+}
+
 /// Everything the Install button does; runs on its own thread so the window never freezes.
 fn run_install(game: &Path, o: Opts) -> (bool, Vec<String>) {
     let mut log = match install(game) {
@@ -763,6 +903,7 @@ struct App {
     job: Option<Job>,
     result: Option<(bool, Vec<String>)>,
     art: (Option<egui::TextureHandle>, Option<egui::TextureHandle>),
+    upd: std::sync::Arc<std::sync::Mutex<Upd>>,
 }
 
 impl App {
@@ -771,7 +912,19 @@ impl App {
         style(ctx, None);
         let opts = game.as_deref().map(load_opts).unwrap_or(Opts { grip: true, fast: false, range: false, tough: false, gfx: 2, dlss: false });
         let art = steam_art(ctx, game.as_deref());
-        App { game, path_text: String::new(), opts, job: None, result: None, art }
+        let upd = std::sync::Arc::new(std::sync::Mutex::new(Upd::Idle));
+        if let Ok(me) = std::env::current_exe() {
+            let _ = std::fs::remove_file(me.with_extension("exe.old")); // left by the last update
+        }
+        start_update(upd.clone(), ctx.clone());
+        let mut app = App { game, path_text: String::new(), opts, job: None, result: None, art, upd };
+        // just updated: put the new mod files into the game too (fails with a clear line if the game is running)
+        if std::env::args().any(|a| a == "--updated") {
+            if let Some(g) = app.game.clone().filter(|g| installed(g)) {
+                app.start(g);
+            }
+        }
+        app
     }
 
     fn start(&mut self, game: PathBuf) {
@@ -798,7 +951,17 @@ impl eframe::App for App {
                 None => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
             }
         }
-        let busy = self.job.is_some();
+        let upd = self.upd.lock().unwrap().clone();
+        // updated and nothing running: start the new version in our place
+        if let (Upd::Done(_), None) = (&upd, &self.job) {
+            if let Ok(me) = std::env::current_exe() {
+                if std::process::Command::new(me).arg("--updated").spawn().is_ok() {
+                    std::process::exit(0);
+                }
+            }
+            *self.upd.lock().unwrap() = Upd::Failed("Updated. Close this window and open SA-Coop.exe again.".into());
+        }
+        let busy = self.job.is_some() || matches!(upd, Upd::Working(_) | Upd::Done(_));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ctx, |ui| {
             header(ui, &self.art);
             egui::Frame::new().inner_margin(egui::Margin { left: 20, right: 20, top: 4, bottom: 16 }).show(ui, |ui| {
@@ -837,7 +1000,7 @@ impl eframe::App for App {
                         ui.checkbox(&mut self.opts.grip, "Better car handling");
                         ui.label(egui::RichText::new("Cars grip the road better and brake harder. Pick the same as your friend.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.fast, "Faster cars");
-                        ui.label(egui::RichText::new("Every car and motorbike can reach at least 200 km/h. Boats, planes and trains stay as they are.").small().color(MUTED));
+                        ui.label(egui::RichText::new("Every car and motorbike can reach at least 260 km/h. Boats, planes and trains stay as they are.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.range, "Longer gun range");
                         ui.label(egui::RichText::new("Guns reach and lock on 60% further, for you and for everyone else.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.tough, "Tougher enemies");
@@ -863,7 +1026,15 @@ impl eframe::App for App {
                 ui.add_space(4.0);
 
                 // 3. the action
-                if busy {
+                if let Upd::Failed(why) = &upd {
+                    ui.label(egui::RichText::new(why).small().color(YELLOW));
+                }
+                if let Upd::Working(v) | Upd::Done(v) = &upd {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("Updating to v{v}. This takes a few seconds…"));
+                    });
+                } else if busy {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label("Installing. This takes a few seconds…");
@@ -898,6 +1069,7 @@ impl eframe::App for App {
                         "Your saved games are not changed. Co-op has its own saves.",
                         "The co-op menu button and car handling are made from your own game files. No game files are downloaded.",
                         "Uninstall removes everything and puts your game back as it was.",
+                        "When it starts, this program asks GitHub for a newer version of the mod and updates itself.",
                     ] {
                         ui.label(egui::RichText::new(format!("• {line}")).small().color(MUTED));
                     }
