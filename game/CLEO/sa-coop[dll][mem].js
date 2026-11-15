@@ -452,6 +452,20 @@ function removeRemote(slot) {
   log(`[sa-coop] friend ${slot} left`);
 }
 
+// One frame of a copied car: a part of the way to where the original is now. `g` = its last known place, speed and
+// when that was heard. Further than 10 m off it is put there. Returns the gap, the speed and the part used.
+function glideCar(car, g, now, dtMs) {
+  const ahead = Math.min((now - g.rt) / 1000, 0.3);
+  const tx = g.x + g.vx * ahead, ty = g.y + g.vy * ahead, tz = g.z + g.vz * ahead;
+  const c = car.getCoordinates();
+  const ex = tx - c.x, ey = ty - c.y, ez = tz - c.z;
+  const err = Math.sqrt(ex * ex + ey * ey + ez * ez);
+  const jumped = err > 10;
+  const f = jumped ? 1 : 1 - Math.exp(-dtMs / 90); // about a fifth of the gap per frame at 60 frames a second
+  if (err > 0.02) car.setCoordinatesNoOffset(c.x + ex * f, c.y + ey * f, c.z + ez * f);
+  return { err, f, jumped, speed: Math.sqrt(g.vx * g.vx + g.vy * g.vy) };
+}
+
 function driveRemote(r, s, now) {
   if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; }
   const real = borrowedCar(r);
@@ -499,44 +513,33 @@ function driveRemote(r, s, now) {
     else { r.vx = dx; r.vy = dy; r.vz = 0; }
     r.rx = s.x; r.ry = s.y; r.rz = s.z; r.rt = now;
   }
-  const ahead = Math.min((now - r.rt) / 1000, 0.3);
-  const tx = r.rx + r.vx * ahead, ty = r.ry + r.vy * ahead, tz = r.rz + r.vz * ahead;
-  const c = r.car.getCoordinates();
-  const ex = tx - c.x, ey = ty - c.y, ez = tz - c.z;
-  const err = Math.sqrt(ex * ex + ey * ey + ez * ez);
-  const speed = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
-  r.car.setQuaternion(s.qx, s.qy, s.qz, s.qw);
-  // far off (a jump, a respawn): put it where it should be
-  if (err > 8 + speed * 0.3) {
-    r.car.setCoordinatesNoOffset(tx, ty, tz);
-    const fx0 = 2 * (s.qx * s.qy - s.qw * s.qz), fy0 = 1 - 2 * (s.qx * s.qx + s.qz * s.qz);
-    r.car.setForwardSpeed(r.vx * fx0 + r.vy * fy0 < 0 ? -speed : speed);
-    return;
-  }
-  // off course by more than a metre (the speed below only corrects along the road, a turn leaves it beside the
-  // line): a third of the way back each frame. One big jump every few seconds threw a passenger about (11-15:
-  // "you teleport when your friend drives"). Moving it stops it, the speed below sets it going again.
-  if (err > 1) r.car.setCoordinatesNoOffset(c.x + ex * 0.3, c.y + ey * 0.3, c.z + ez * 0.3);
-  // close enough: the game's physics drives it (wheels turn); catch up or fall back through the speed
+  // Every frame the copy is moved a part of the way to where the friend's car is now (their last place plus their
+  // speed since), and turned a part of the way to how it stands: small steps at the frame rate, no jumps. Before
+  // 11-15 the game's physics drove the copy and it was put right in jumps (first every 2 m, then a third of the
+  // gap past 1 m), with its rotation set only when a packet came, 20 times a second: "the car jitters when my
+  // friend drives". The speed set after the move keeps the wheels turning.
+  const dt = Math.min(100, Math.max(1, now - (r.frameAt || now - 16)));
+  r.frameAt = now;
+  const g = glideCar(r.car, { x: r.rx, y: r.ry, z: r.rz, vx: r.vx, vy: r.vy, vz: r.vz, rt: r.rt }, now, dt);
+  try {
+    const q = r.car.getQuaternion();
+    let tx2 = s.qx, ty2 = s.qy, tz2 = s.qz, tw2 = s.qw;
+    if (q.x * tx2 + q.y * ty2 + q.z * tz2 + q.w * tw2 < 0) { tx2 = -tx2; ty2 = -ty2; tz2 = -tz2; tw2 = -tw2; } // the short way round
+    const k = g.jumped ? 1 : g.f;
+    let nx = q.x + (tx2 - q.x) * k, ny = q.y + (ty2 - q.y) * k, nz = q.z + (tz2 - q.z) * k, nw = q.w + (tw2 - q.w) * k;
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz + nw * nw) || 1;
+    r.car.setQuaternion(nx / len, ny / len, nz / len, nw / len);
+  } catch (e) { r.car.setQuaternion(s.qx, s.qy, s.qz, s.qw); }
   // which way the car faces (quaternion applied to +y): moving against it is reverse
   const fx = 2 * (s.qx * s.qy - s.qw * s.qz), fy = 1 - 2 * (s.qx * s.qx + s.qz * s.qz);
   const sign = r.vx * fx + r.vy * fy < 0 ? -1 : 1;
-  let along = 0;
-  if (speed > 0.5) along = (ex * r.vx + ey * r.vy) / speed;
-  r.car.setForwardSpeed(sign * Math.max(0, speed + along * 1.5));
-  // a driver with nothing to do holds the handbrake (rear wheels locked): give it a drive towards a point ahead
+  r.car.setForwardSpeed(sign * g.speed);
   if (now - (r.lastDrive || 0) > 300) {
     r.lastDrive = now;
     try {
-      if (s.flags & 8) {
-        // their burnout: the copy's driver floors it while we hold the car in place, so the wheels spin and smoke
-        r.car.setTempAction(8, 400); // TempAction.GoForward
-      } else if (speed > 0.5 && sign > 0) {
-        r.car.setCruiseSpeed(Math.max(10, speed * 3.6));
-        r.car.gotoCoordinatesAccurate(tx + fx * 25, ty + fy * 25, tz);
-      } else {
-        r.car.setMission(0); // standing or reversing: no AI driving
-      }
+      // their burnout: the copy's driver floors it while we hold the car in place, so the wheels spin and smoke
+      if (s.flags & 8) r.car.setTempAction(8, 400); // TempAction.GoForward
+      else r.car.setMission(0); // no driving of its own: we move it
     } catch (e) {}
   }
 }
@@ -1154,7 +1157,11 @@ function mirrorMissionEntities(now) {
       if (kind === 1) {
         // a car: far off it is put in place, close by it is drawn towards its place in small steps (no jumps)
         if (d2 > 100) { p.ent.setCoordinatesNoOffset(x, y, z); p.ent.setHeading(heading); }
-        else if (d2 > 1) { p.ent.setCoordinatesNoOffset(c.x + (x - c.x) * 0.3, c.y + (y - c.y) * 0.3, c.z + (z - c.z) * 0.3); p.ent.setHeading(heading); }
+        else if (d2 > 0.04) {
+          p.ent.setCoordinatesNoOffset(c.x + (x - c.x) * 0.3, c.y + (y - c.y) * 0.3, c.z + (z - c.z) * 0.3);
+          const dh = ((heading - p.ent.getHeading() + 540) % 360) - 180;
+          if (Math.abs(dh) > 0.5) p.ent.setHeading((p.ent.getHeading() + dh * 0.3 + 360) % 360);
+        }
       } else if (d2 > 16) {
         p.ent.setCoordinatesNoOffset(x, y, z);
         p.ent.setHeading(heading);
@@ -1706,6 +1713,7 @@ function receiveWorldTick(me, t, guest) {
     }
   }
   if (takenFromHost.size > 400) takenFromHost.clear();
+  glideWorld(t);
 }
 // a copy holds what the original holds and fires when it fires (straight ahead, as a friend's copy does)
 function armCopy(p, weapon, shooting, s, t) {
@@ -1787,29 +1795,26 @@ function updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t) {
   if (!Car.DoesExist(p.ent)) { worldProxies.delete(h); return; }
   // a wreck in the owner's game: the copy just stops being moved (an explosion made from here would have the game
   // build its effects on the script's thread)
-  if (s.hp <= 0) { p.hp = 0; return; }
+  if (s.hp <= 0) { p.hp = 0; p.g = null; return; }
   p.hp = s.hp;
-  const c = p.ent.getCoordinates();
-  const ex = s.x - c.x, ey = s.y - c.y, ez = s.z - c.z;
-  const err = Math.sqrt(ex * ex + ey * ey + ez * ez);
-  const speed = Math.sqrt(s.vx * s.vx + s.vy * s.vy);
-  if (err > 10) { p.ent.setCoordinatesNoOffset(s.x, s.y, s.z); p.ent.setHeading(s.heading); }
-  else if (err > 1) p.ent.setCoordinatesNoOffset(c.x + ex * 0.3, c.y + ey * 0.3, c.z + ez * 0.3);
-  if (t - p.headAt > 100) {
-    p.headAt = t;
-    let dh = Math.abs(p.ent.getHeading() - s.heading) % 360; if (dh > 180) dh = 360 - dh;
-    if (dh > 4) p.ent.setHeading(s.heading);
-  }
-  // which way it faces: moving against that is reverse
-  const hr = s.heading * Math.PI / 180, fx = -Math.sin(hr), fy = Math.cos(hr);
-  const sign = s.vx * fx + s.vy * fy < 0 ? -1 : 1;
-  p.ent.setForwardSpeed(sign * speed);
-  // a driver with nothing to do holds the handbrake: give it a drive towards a point ahead (as for a friend's car)
-  if (p.driver && t - p.driveAt > 500) {
-    p.driveAt = t;
+  p.g = { x: s.x, y: s.y, z: s.z, vx: s.vx, vy: s.vy, vz: s.vz, heading: s.heading, rt: t }; // moved in glideWorld
+}
+// every frame: each copied car a part of the way to where its original is (packets come 8 times a second; moving
+// only then made the traffic stutter)
+function glideWorld(t) {
+  const dt = Math.min(100, Math.max(1, t - (glideWorld.at || t - 16)));
+  glideWorld.at = t;
+  for (const p of worldProxies.values()) {
+    if (p.kind !== 1 || !p.g) continue;
     try {
-      if (speed > 0.5 && sign > 0) { p.ent.setCruiseSpeed(Math.max(10, speed * 3.6)); p.ent.gotoCoordinatesAccurate(s.x + fx * 25, s.y + fy * 25, s.z); }
-      else p.ent.setMission(0);
+      if (!Car.DoesExist(p.ent)) continue;
+      const g = glideCar(p.ent, p.g, t, dt);
+      let dh = ((p.g.heading - p.ent.getHeading() + 540) % 360) - 180; // the short way round, -180..180
+      if (g.jumped) p.ent.setHeading(p.g.heading);
+      else if (Math.abs(dh) > 0.5) p.ent.setHeading((p.ent.getHeading() + dh * g.f + 360) % 360);
+      const hr = p.g.heading * Math.PI / 180;
+      const sign = p.g.vx * -Math.sin(hr) + p.g.vy * Math.cos(hr) < 0 ? -1 : 1;
+      p.ent.setForwardSpeed(sign * g.speed);
     } catch (e) {}
   }
 }
@@ -1822,7 +1827,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.0", EV_VERSION = 21;
+const VERSION = "0.9.1", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
