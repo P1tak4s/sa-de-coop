@@ -1231,6 +1231,51 @@ function skipAgreed() {
   logx("[sa-coop] cutscene skipped by both");
 }
 
+// ---- a mission's scripted scenes (11-15 18:10: "not all cutscenes start for him") --------------------------------
+// Besides its cutscene files a mission plays scenes of its own: it takes the player's controls, puts the camera
+// somewhere and lets people talk. Those are no cutscene to send. The host sends where its camera is and what it
+// looks at, ten times a second, while a mission has its controls; the guest's camera shows the same (its controls
+// held and nothing hurting it), and is given back when the host's controls come back.
+const EV_CAM = 32;
+let camSentAt = 0, camWas = false, guestCam = false, guestCamAt = 0;
+function camTick(now) {
+  if (isGuest()) {
+    if (guestCam && now - guestCamAt > 3000) endGuestCam(); // the host went quiet
+    return;
+  }
+  if (!anyFriend() || now - camSentAt < 100) return;
+  camSentAt = now;
+  let scene = false;
+  try { scene = !!ONMISSION && !player.isControlOn() && Memory.ReadU8(RVA.cutRunning, false, true) !== 1; } catch (e) {}
+  if (scene) {
+    try {
+      const c = Camera.GetActiveCoordinates(), a = Camera.GetActivePointAt();
+      sendEvent(EV_CAM, [c.x, c.y, c.z, a.x, a.y, a.z].map((v) => v.toFixed(1)).join(","));
+    } catch (e) {}
+  } else if (camWas) sendEvent(EV_CAM, "-");
+  camWas = scene;
+}
+function onCam(text, me) {
+  if (!isGuest() || playingCut) return;
+  if (text === "-") { endGuestCam(); return; }
+  const v = text.split(",").map(Number);
+  if (v.length !== 6 || !v.every(Number.isFinite)) return;
+  try {
+    if (dist2(me.getCoordinates(), { x: v[0], y: v[1], z: v[2] }) > 200 * 200) return; // far from it: nothing loaded there
+    if (!guestCam) { guestCam = true; try { player.setControl(false); } catch (e) {} shield(me, 120000); logx("[sa-coop] the host's mission scene: shown here"); }
+    guestCamAt = Date.now();
+    Camera.SetFixedPosition(v[0], v[1], v[2], 0, 0, 0);
+    Camera.PointAtPoint(v[3], v[4], v[5], 2);
+  } catch (e) { err(`[sa-coop] scene camera: ${e}`); }
+}
+function endGuestCam() {
+  if (!guestCam) return;
+  guestCam = false;
+  try { Camera.RestoreJumpcut(); } catch (e) {}
+  try { player.setControl(true); } catch (e) {}
+  if (shieldUntil) shieldUntil = Date.now() + 2000;
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -1274,6 +1319,7 @@ function hearWorld(me) {
     else if (kind === EV_CUTEND) { if (shieldUntil) shieldUntil = Date.now() + 2000; }
     else if (kind === EV_SAY) say(text.replace(/`/g, " "));
     else if (kind === EV_SKIPREQ) onSkipRequest();
+    else if (kind === EV_CAM) onCam(text, me);
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION) onFriendMission(text, me);
@@ -2280,7 +2326,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.27", EV_VERSION = 21;
+const VERSION = "0.9.28", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2534,6 +2580,7 @@ while (true) {
   missionsTick(now);
   iconsTick(now);
   skipTick();
+  camTick(now);
   friendLogTick(now);
   blipIconTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
