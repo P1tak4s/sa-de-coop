@@ -2,7 +2,7 @@
 
 How a session works: the story runs in the **host's** game. The guest's game shows copies of the host's mission
 people and cars, the host's traffic and police, the mission's texts, cutscenes and objective markers, and sends the
-guest's actions back. Status as of 0.9.33 (15 Nov 2026).
+guest's actions back. Status as of 0.9.36 (15 Nov 2026).
 
 Legend:
 - `[x]` works, seen in a real two-player test
@@ -30,14 +30,16 @@ Legend:
 - [ ] Down instead of dead after one big hit (explosion, fall): the game kills at once
 - [ ] Mission failed only when both are down
 - [x] Riding as a passenger in a friend's car
+- [~] No crash when a third person gets into a two-seat car (0.9.35)
 - [~] J: jump to your friend; never hangs you on a car's outside (0.9.29)
 - [x] Skills shared (the higher one is kept)
 - [x] Wanted level shared
-- [ ] Breath bar, max health, other stats
+- [~] Max health shared (the higher one is kept) (0.9.36)
+- [ ] Breath bar, other stats
 - [ ] Idle animations
 - [ ] Parachute
 - [ ] Hydraulics
-- [ ] Radio station
+- [~] Radio: a passenger hears the driver's station (0.9.36)
 
 ## World
 

@@ -1097,7 +1097,7 @@ function playCutscene(text, me) {
 // Missions ask for skills (driving, flying, lung capacity) and each game checks its own player. Every 10 s each side
 // sends its skills; a higher one from a friend is taken over, none is ever lowered. Looks (fat, muscle) stay yours.
 const EV_STATS = 10;
-const SKILL_F = [22, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79]; // stamina, weapon skills (pistol ... rifle)
+const SKILL_F = [22, 24, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79]; // stamina, max health, weapon skills (pistol ... rifle)
 const SKILL_I = [160, 169, 225, 229, 230];                        // driving, flying, lung capacity, bike, cycling
 let statsAt = 0, statsSent = "", statsSentAt = 0, statsErr = false;
 function statsTick(now) {
@@ -1311,6 +1311,34 @@ function endGuestCam() {
   if (shieldUntil) shieldUntil = Date.now() + 2000;
 }
 
+// ---- one radio in one car: a passenger hears the driver's station ------------------------------------------------
+const EV_RADIO = 35;
+let radioSentAt = 0, radioSent = -2;
+function radioTick(me, now) {
+  if (now - radioSentAt < 1500) return;
+  radioSentAt = now;
+  try {
+    if (!me.isInAnyCar()) { radioSent = -2; return; }
+    const car = me.storeCarIsInNoSave(), d = car.getDriver();
+    if (!d || +d !== +me || remoteWithCar(car) >= 0) return; // the driver of our own car only
+    let anyone = false;
+    for (const r of remotes) if (r && Char.DoesExist(r.ped) && r.ped.isInAnyCar() && +r.ped.storeCarIsInNoSave() === +car) anyone = true;
+    if (!anyone) return;
+    const ch = Number(Audio.GetRadioChannel());
+    if (Number.isFinite(ch) && (ch !== radioSent || now % 10000 < 1500)) { radioSent = ch; sendEvent(EV_RADIO, String(ch)); }
+  } catch (e) {}
+}
+function onRadio(text, me) {
+  const ch = parseInt(text, 10);
+  if (!Number.isFinite(ch) || ch < 0 || ch > 20) return;
+  try {
+    if (!me.isInAnyCar()) return;
+    const car = me.storeCarIsInNoSave(), d = car.getDriver();
+    if (d && +d === +me) return; // we drive: our own station
+    if (Number(Audio.GetRadioChannel()) !== ch) Audio.SetRadioChannel(ch);
+  } catch (e) {}
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -1355,6 +1383,7 @@ function hearWorld(me) {
     else if (kind === EV_SAY) say(text.replace(/`/g, " "));
     else if (kind === EV_SKIPREQ) onSkipRequest();
     else if (kind === EV_CAM) onCam(text, me);
+    else if (kind === EV_RADIO) onRadio(text, me);
     else if (kind === EV_CUTLOAD) onCutLoad(text, me);
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
@@ -2385,7 +2414,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.35", EV_VERSION = 21;
+const VERSION = "0.9.36", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2642,6 +2671,7 @@ while (true) {
   keyHints(me);
   missionsTick(now);
   iconsTick(now);
+  radioTick(me, now);
   skipTick();
   camTick(now);
   friendLogTick(now);
