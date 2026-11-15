@@ -21,6 +21,34 @@ fn saves_in(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// The newest save in the game's profile folder (the set in use): (file name, bytes). What the host sends a guest.
+pub fn newest_save() -> Option<(String, Vec<u8>)> {
+    let profile = profile_dir()?;
+    let newest = saves_in(&profile).into_iter().max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())?;
+    let name = newest.file_name()?.to_str()?.to_string();
+    Some((name, std::fs::read(&newest).ok()?))
+}
+
+/// A guest got the host's save: switch to the co-op set (own saves backed up and put aside, as the menu toggle does)
+/// and put the host's file in the profile under the host's slot name. Returns a line for the player.
+pub fn receive_host_save(name: &str, bytes: &[u8]) -> Result<String, String> {
+    let ok_name = name.len() < 32
+        && name.to_ascii_lowercase().ends_with(".sav")
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if !ok_name || bytes.len() < 1000 || bytes.len() > 8_000_000 {
+        return Err(format!("host save refused: {name}, {} bytes", bytes.len()));
+    }
+    if mode() != "coop" {
+        switch_to("coop")?;
+    }
+    let profile = profile_dir().ok_or("game save folder not found")?;
+    std::fs::write(profile.join(name), bytes).map_err(|e| format!("could not write host save: {e}"))?;
+    let digits: String = name.trim_end_matches(".sav").chars().rev().take_while(|c| c.is_ascii_digit()).collect();
+    let slot: String = digits.chars().rev().collect();
+    crate::log_line(&format!("saves: host save {name} ({} bytes) written", bytes.len()));
+    Ok(format!("Host's save received: Load Game, slot {slot}"))
+}
+
 pub fn mode() -> String {
     data_dir().and_then(|d| std::fs::read_to_string(d.join("saves-mode.txt")).ok()).map(|s| s.trim().to_string()).unwrap_or_else(|| "solo".into())
 }

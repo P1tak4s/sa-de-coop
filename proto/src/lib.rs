@@ -20,6 +20,15 @@ pub const EV_MISSION: u8 = 3; // text: mission script name ("" = mission over)
 pub const ENTS: u8 = 9; // mission entities of the sender's game: n u8 + n x ENT_SIZE (relayed with the sender slot first)
 pub const ENT_SIZE: usize = 28; // handle u32, kind u8 (1 car, 2 char), dead u8, model u16, x y z heading health f32
 pub const MAX_ENTS: usize = 40;
+/// The host's ordinary peds and cars around a guest (Steam only, unreliable): n u8 + n x WORLD_SIZE. Several packets
+/// per update; the guest keeps every copy it heard of in the last 1.5 s.
+pub const WORLD: u8 = 10;
+pub const WORLD_SIZE: usize = 44; // handle u32, kind u8 (1 car, 2 ped), colour1 u8, colour2 u8, flags u8, model u16, driver model u16, x y z heading vx vy vz health f32
+pub const WORLD_PER_PACKET: usize = 24;
+/// The host's save file for a guest that just joined (Steam only, reliable): part u16, parts u16, then the bytes.
+/// Part 0 starts with the file name: len u8 + ASCII.
+pub const SAVE: u8 = 11;
+pub const SAVE_PART: usize = 1000;
 pub const NAMES: u8 = 7; // server -> clients: n u8, then n x (slot u8, nick [16])
 pub const REVIVE: u8 = 6; // client -> server: target slot u8; server -> clients: from slot u8, target slot u8
 

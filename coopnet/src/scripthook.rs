@@ -85,8 +85,11 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
 
 unsafe extern "C" fn can_start(ped: *mut u8) -> u8 {
     if connected() {
-        // 11-15: the guest may start its own missions (in the VC test a friend on a new game could neither play nor
-        // save). Only the host waits for its partner.
+        // one story for both: the guest plays the host's missions, never its own (the host's save is sent to the
+        // guest when it joins, so the guest is not left without progress). Only while a host is really there.
+        if !crate::is_host() && crate::coop_friends() > 0 {
+            return 0;
+        }
         if crate::is_host() && PARTNER_PED.load(Ordering::Relaxed) > 0 && !PARTNER_NEAR.load(Ordering::Relaxed) {
             return 0; // the host waits in the marker until the partner is there too
         }

@@ -57,6 +57,7 @@ Your friend does the same on their PC. The full walkthrough is in [Install (step
 | **Co-op from the menu** | A **co-op** entry in the main and pause menus opens a screen styled like the game's options. Sessions are Steam lobbies found by name and password, worldwide, with no port forwarding. |
 | **One story for both** | The host's story is the one you play. Mission text, map markers and cutscenes reach both players. |
 | **Together in the world** | Your friend walks, runs and drives in your world with their weapon, a name tag and a map blip. Clock, weather and wanted level are shared. |
+| **One world for both** | Near the host, the guest sees the host's pedestrians and traffic instead of its own, and gets the host's newest save when joining, so both play the same story. First version: police and mission enemies still act in each game on their own. |
 | **Ride along** | **G** puts you in your friend's car. When it is full, or a bike, you ride on the trunk or behind the rider and can still shoot. |
 | **Down, not dead** | Below 40 health you fall instead of dying. A 30-second countdown appears, and your friend holds **E** to get you up. |
 | **Catch up** | **J** jumps you to your friend: into a free seat, onto the trunk, or beside them. During a mission the game offers it when you fall far behind. |
