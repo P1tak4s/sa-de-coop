@@ -37,8 +37,9 @@ game not found
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SA Co-op installer")
-            .with_inner_size([520.0, 660.0])
-            .with_resizable(false)
+            .with_inner_size([520.0, 700.0])
+            .with_min_inner_size([420.0, 360.0])
+            .with_resizable(true)
             .with_icon(icon),
         ..Default::default()
     };
@@ -964,6 +965,9 @@ impl eframe::App for App {
         let busy = self.job.is_some() || matches!(upd, Upd::Working(_) | Upd::Done(_));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ctx, |ui| {
             header(ui, &self.art);
+            // everything under the picture scrolls: on a small or scaled screen the window is shorter than its content
+            // and the Install / Play buttons were out of reach (11-15)
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             egui::Frame::new().inner_margin(egui::Margin { left: 20, right: 20, top: 4, bottom: 16 }).show(ui, |ui| {
                 // 1. the game
                 let game = card(ui, "YOUR GAME", |ui| match self.game.clone() {
@@ -1076,7 +1080,8 @@ impl eframe::App for App {
                 });
 
                 // footer
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                ui.add_space(10.0);
+                {
                     ui.horizontal(|ui| {
                         ui.hyperlink_to(egui::RichText::new("Free and open source").small(), REPO);
                         ui.label(
@@ -1090,7 +1095,8 @@ impl eframe::App for App {
                             }
                         });
                     });
-                });
+                }
+            });
             });
         });
     }
