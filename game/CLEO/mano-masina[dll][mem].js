@@ -8,6 +8,21 @@ for (const path of ["coopnet64.asi", "../coopnet64.asi"]) { lib = DynamicLibrary
 const store = lib ? Memory.Fn.X64(lib.getProcedure("coop_car_store")) : null;
 const load = lib ? Memory.Fn.X64(lib.getProcedure("coop_car_load")) : null;
 const rec = Memory.Allocate(28);
+let trackedFn = null;
+try { trackedFn = lib ? Memory.Fn.X64(lib.getProcedure("coop_tracked")) : null; } catch (e) {}
+// a car the co-op script made (a friend's car, a copy of the host's traffic): never ours to keep
+function coopCar(car) { try { return trackedFn ? trackedFn(+car) === 1 : false; } catch (e) { return false; } }
+// another car of this model near a point (not `not`): the game or a mission has put its own one there
+function twinNear(model, x, y, z, radius, not) {
+  for (let i = 0; i < 8; i++) {
+    try {
+      const c = World.GetRandomCarInSphereNoSave(x, y, z, radius, model);
+      if (c && +c > 0 && Car.DoesExist(+c) && (!not || +c !== +not)) return c;
+    } catch (e) { return null; }
+  }
+  return null;
+}
+let missionWas = false;
 
 const player = new Player(0);
 let mine = null;   // the car we keep
@@ -54,6 +69,15 @@ function restore() {
   }
   const x = Memory.ReadFloat(rec + 4, false, false), y = Memory.ReadFloat(rec + 8, false, false), z = Memory.ReadFloat(rec + 12, false, false);
   try {
+    // the same car is already standing there (the game kept it, or a mission brought one): keep that one. A second
+    // one on top of it was the "two cars when the mission starts" of 11-15.
+    const twin = twinNear(model, x, y, z, 15, null);
+    if (twin) {
+      mine = twin;
+      try { mine.setAsMissionCar(); } catch (e) {}
+      log(`[mano-masina] car ${model} is already there, keeping that one`);
+      return true;
+    }
     const car = Car.Create(model, x, y, z);
     Streaming.MarkModelAsNoLongerNeeded(model);
     car.setHeading(Memory.ReadFloat(rec + 16, false, false));
@@ -82,7 +106,11 @@ while (true) {
     // storeCarIsIn returns -1 on the Definitive Edition; take the car and make it a mission car ourselves
     const car = me.storeCarIsInNoSave();
     // during a mission the car may belong to the mission: releasing it later could delete it and break the mission
-    if (+car > 0 && !ONMISSION && (!mine || +car !== +mine)) {
+    // only a car we drive ourselves, and never one of the co-op script's (riding in a friend's car used to make
+    // it "ours", and it came back as a second car after the next load)
+    let driving = false;
+    try { const d = car.getDriver(); driving = !!d && +d === +me; } catch (e) {}
+    if (+car > 0 && !ONMISSION && driving && !coopCar(car) && (!mine || +car !== +mine)) {
       letGo();
       mine = car;
       try { mine.setAsMissionCar(); } catch (e) { log(`[mano-masina] setAsMissionCar failed: ${e}`); }
@@ -93,6 +121,20 @@ while (true) {
     continue;
   }
 
+  // a mission has just started and brought its own car of the same kind next to ours: ours goes
+  if (ONMISSION && !missionWas && mine && exists(mine)) {
+    try {
+      const c = mine.getCoordinates();
+      if (twinNear(mine.getModel(), c.x, c.y, c.z, 30, mine)) {
+        log("[mano-masina] the mission brought the same car: ours removed");
+        dropBlip();
+        mine.delete();
+        mine = null;
+        if (store) store(0);
+      }
+    } catch (e) { log(`[mano-masina] mission start: ${e}`); }
+  }
+  missionWas = !!ONMISSION;
   if (mine && !exists(mine)) {
     log("[mano-masina] car wrecked or gone, letting go");
     letGo();
