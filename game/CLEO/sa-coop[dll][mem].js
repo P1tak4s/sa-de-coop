@@ -609,6 +609,9 @@ function syncRemotes(me, mySlot, now) {
     if (!r) continue;
     r.lostAt = 0;
     try {
+      // the door a friend went in by: where they last stood outside (see followTick)
+      if (s.interior === 0) { r.lastOut = { x: s.x, y: s.y, z: s.z }; r.door = null; }
+      else if ((r.area || 0) === 0 && r.lastOut) r.door = r.lastOut;
       if (r.area !== s.interior) { r.area = s.interior; r.ped.setAreaVisible(s.interior); if (r.car) r.car.setAreaVisible(s.interior); }
       if (slot < mySlot || mySlot < 0) followClock(s.clock);
       shareWanted(r, s);
@@ -806,7 +809,34 @@ function onStats(text) {
 try {
   FxtStore.insert("COOPHG", "G - get in your friend's car");
   FxtStore.insert("COOPHF", "F - get out");
+  FxtStore.insert("COOPHI", "Your friend is inside: walk to the door or press J");
+  FxtStore.insert("COOPHO", "J - go to your friend");
 } catch (e) {}
+// ---- through doors together -----------------------------------------------------------------------------------
+// A house, a shop or a barber opens for the player whose story unlocked it; in the friend's game the same door can
+// be shut (11-15: "he cannot go into houses, the barber and so on"). So doors are followed, not opened: a friend
+// who went inside leaves a mark where they stood outside; standing there takes you in beside them, and J takes you
+// to them from anywhere (in or out).
+let followAt = 0, unfreezeAt = 0, doorHint = "";
+function followTick(me, now) {
+  doorHint = "";
+  if (unfreezeAt && now > unfreezeAt) { unfreezeAt = 0; try { me.freezePosition(false); } catch (e) {} }
+  if (downed) return;
+  try {
+    const mine = me.getAreaVisible(), p = me.getCoordinates();
+    for (const r of remotes) {
+      if (!r || !Char.DoesExist(r.ped) || r.down) continue;
+      const theirs = r.area || 0;
+      if (theirs === mine) continue;
+      if (mine === 0 && theirs !== 0 && r.door) {
+        const d = dist2(p, r.door);
+        if (d < 3 * 3 && !me.isInAnyCar() && now - followAt > 3000) { followAt = now; jumpToFriend(me); return; }
+        if (d < 40 * 40) doorHint = "COOPHI";
+      } else if (mine !== 0) doorHint = "COOPHO"; // we are inside, they are not (or in another building)
+    }
+  } catch (e) {}
+}
+
 function keyHints(me) {
   if (downed) return;
   let key = "";
@@ -819,6 +849,7 @@ function keyHints(me) {
         if (r && r.car && !r.down && Car.DoesExist(r.car) && dist2(p, r.car.getCoordinates()) < 7 * 7) { key = "COOPHG"; break; }
       }
     }
+    if (!key) key = doorHint;
     if (!key) return;
     Text.UseCommands(true); Text.SetFont(1); Text.SetScale(0.4, 1.6); Text.SetCenter(true);
     Text.SetColor(255, 255, 255, 255); Text.SetDropshadow(1, 0, 0, 0, 255);
@@ -1080,7 +1111,9 @@ function jumpToFriend(me) {
     } else {
       const c = r.ped.getCoordinates();
       Streaming.RequestCollision(c.x, c.y); // no LOAD_SCENE: it crashes the Definitive Edition from a script
-      me.setCoordinates(c.x + 1.5, c.y + 1, c.z);
+      me.setCoordinates(c.x + 0.6, c.y + 0.6, c.z);
+      // indoors the floor is loaded a moment later: held still until then, or we fall through it
+      if (area !== 0) { try { me.freezePosition(true); unfreezeAt = Date.now() + 1500; } catch (e) {} }
     }
     farSince = 0;
     say("SA Co-op: you jumped to your friend");
@@ -1598,7 +1631,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.9", EV_VERSION = 21;
+const VERSION = "0.8.10", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -1678,6 +1711,7 @@ while (true) {
   sharedWorldTick(me, now);
   refusedTick(now);
   versionTick(now);
+  followTick(me, now);
   keyHints(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
