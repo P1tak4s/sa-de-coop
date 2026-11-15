@@ -154,17 +154,18 @@ fn install(game: &Path) -> Result<Vec<String>, String> {
 
 // ---- car tuning: the game's own handling.cfg, retuned on this PC, packed as coopcars_P.pak ---------------------
 // Better handling: turns in quicker (more steering lock, less turn mass), more grip, stronger brakes, more pull, less wobble.
-// Faster cars: top speed at least 260 for road cars and motorbikes, with the pull to get there.
+// Faster cars: top speed at least 300 for road cars and motorbikes, with the pull to get there.
 // Both players should pick the same. The choice is remembered in %LOCALAPPDATA%\sa-de-coop\cars.txt.
 const HANDLING: &str = "Gameface/Content/OriginalData/GTASA/data/handling.cfg";
-const FAST_TOP_SPEED: f32 = 260.0;
+const FAST_TOP_SPEED: f32 = 300.0;
 /// Not made faster: trains, RC toys, bicycles and work machines (boats and aircraft are found in the file itself).
 const NOT_FAST: [&str; 19] = [
     "FREIGHT", "STREAK", "TRAM", "FREIFLAT", "STREAKC", "RCBANDIT", "RCTIGER", "RCCAM", "BIKE", "BMX", "MTBIKE",
     "FORKLIFT", "TRACTOR", "MOWER", "SWEEPER", "KART", "COMBINE", "TUG", "BAGGAGE",
 ];
 
-/// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: C turn mass (2), J traction (8), N top speed (12),
+/// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: C turn mass (2), G centre of mass height (6),
+/// I traction (8), J traction loss (9), N top speed (12),
 /// O engine acceleration (13), Q drive type (15), R engine type (16), S brake deceleration (17), b damping (22).
 fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::HashSet<String>) -> String {
     let t: Vec<&str> = line.split_whitespace().collect();
@@ -181,11 +182,16 @@ fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::
     let set = |out: &mut Vec<String>, i: usize, v: f32| out[i] = format!("{v:.3}");
     if grip {
         // 2 turn mass (lower = turns in quicker; 0.7 spun cars out), 8 traction (more grip all round; moving the bias
-        // to the front made the rear slide), 13 acceleration, 17 brakes, 20 steering lock, 22 damping
-        for (i, k, max) in [(2, 0.85, 50000.0), (8, 1.2, 2.2), (13, 1.15, 100.0), (17, 1.25, 20.0), (20, 1.15, 45.0), (22, 1.15, 1.0)] {
+        // to the front made the rear slide), 9 traction loss (lower = slides less), 13 acceleration, 17 brakes,
+        // 20 steering lock, 22 damping. 11-15: "faster and better handling": more grip and brakes for 300 km/h.
+        for (i, k, max) in [(2, 0.85, 50000.0), (8, 1.35, 2.5), (9, 0.85, 1.0), (13, 1.25, 100.0), (17, 1.4, 20.0), (20, 1.15, 45.0), (22, 1.2, 1.0)] {
             if let Some(v) = num(&out, i) {
                 set(&mut out, i, (v * k).min(max));
             }
+        }
+        // 6 centre of mass 0.1 lower: steadier at speed, rolls over less
+        if let Some(v) = num(&out, 6) {
+            set(&mut out, 6, v - 0.1);
         }
     }
     if fast && !not_fast.contains(first) && !NOT_FAST.contains(&first) {
@@ -1081,7 +1087,7 @@ impl eframe::App for App {
                         ui.checkbox(&mut self.opts.grip, "Better car handling");
                         ui.label(egui::RichText::new("Cars grip the road better and brake harder. Pick the same as your friend.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.fast, "Faster cars");
-                        ui.label(egui::RichText::new("Every car and motorbike can reach at least 260 km/h. Boats, planes and trains stay as they are.").small().color(MUTED));
+                        ui.label(egui::RichText::new("Every car and motorbike can reach at least 300 km/h. Boats, planes and trains stay as they are.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.range, "Longer gun range");
                         ui.label(egui::RichText::new("Guns reach and lock on 60% further, for you and for everyone else.").small().color(MUTED));
                         ui.checkbox(&mut self.opts.tough, "Tougher enemies");

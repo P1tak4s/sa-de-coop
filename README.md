@@ -66,7 +66,7 @@ What works, what is built but not yet tested, and what is left: [docs/TODO.md](d
 | **AI partner** | Playing alone? A Grove Street partner follows you, rides in the back, fights rival gangs, revives you and can drive you to your waypoint. Decisions come from TypeSafe Jev or OpenAI with your own key. |
 | **Better graphics** | Presets from Balanced to Ultra: higher render resolution, ambient occlusion, reflections, sharper and longer shadows. An optional ReShade look is included. |
 | **Better car handling** | Optional: more grip, stronger brakes, a bit more pull and less body roll, built from your own game files. |
-| **Faster cars** | Optional: every road car and motorbike can reach at least 260 km/h, with the pull to get there. Boats, planes, trains and bicycles stay as they are. |
+| **Faster cars** | Optional: every road car and motorbike can reach at least 300 km/h, with the pull to get there. Boats, planes, trains and bicycles stay as they are. |
 | **Harder fights** | Optional: guns reach 60% further, and armed enemies aim better, shoot more often and take more hits. |
 | **Session settings** | The host picks **friendly fire** (off or on) and the **revive time** (30 or 60 seconds) in the co-op menu; they apply to everyone in the session. |
 | **Settings in the game** | The co-op menu has a **Settings** tab with every option above plus graphics and DLSS. Tougher enemies changes at once; the rest is applied when you close the game. |
