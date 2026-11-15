@@ -1001,6 +1001,10 @@ function playCutscene(text, me) {
       try { flag(2, "cutscene"); } catch (e) {}
     }
     if (!nativeCall(0x02EA, 2000)) Cutscene.Clear();
+    // A cutscene ends faded out, and the game turns its sound down with the fade. The mission that runs a cutscene
+    // fades back in afterwards; nobody did here, and the guest was left without sound after every cutscene (11-15).
+    try { Camera.DoFade(400, 1); } catch (e) { err(`[sa-coop] cutscene ${name}, fade in: ${e}`); }
+    try { Camera.RestoreJumpcut(); } catch (e) {}
   } catch (e) { err(`[sa-coop] cutscene ${name}: ${e}`); }
   if (changed) {
     try {
@@ -1974,7 +1978,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.8", EV_VERSION = 21;
+const VERSION = "0.9.9", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
