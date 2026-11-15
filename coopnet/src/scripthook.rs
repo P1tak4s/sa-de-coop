@@ -316,6 +316,12 @@ unsafe extern "C" fn will_kill(calc: *mut u8, ped: *mut u8, resp: *mut u8, speak
 // with $PLAYER_ACTOR set to the friend's copy: that enemy fights the friend (its copy in the friend's game fires at
 // the friend). An order given TO the player ($PLAYER_ACTOR as the first parameter, a scene) is left alone.
 const ATTACKS: &[u32] = &[0x05E2, 0x0634, 0x0635, 0x0637, 0x074D, 0x07A5];
+// The missions move the player's character about 900 times (SET_CHAR_COORDINATES and kin on $PLAYER_ACTOR: after a
+// cutscene, at the start of a part); the friend was left behind. Each such move is told to the friends (the place is
+// in CTheScripts::ScriptParams, 0x5212F90, after the command has read its parameters), and they come along.
+const MOVES: &[u32] = &[0x00A1, 0x08C7, 0x0972, 0x09BC];
+const SCRIPT_PARAMS: usize = 0x5212F90;
+pub const EV_MOVED: u8 = 40;
 static ATTACK_TURN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 type Handler = unsafe extern "C" fn(*mut u8, u32) -> u8;
@@ -422,6 +428,18 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
         }
     }
     let partner = PARTNER_PED.load(Ordering::Relaxed);
+    if MOVES.contains(&op) && *s.add(S_MISSION) != 0 && connected() && crate::is_host() && crate::coop_friends() > 0 {
+        let first = std::slice::from_raw_parts(ip as *const u8, 3);
+        if first == [2, 12, 0] {
+            let p = (BASE + SCRIPT_PARAMS) as *const f32;
+            let (x, y, z) = (*p.add(1), *p.add(2), *p.add(3));
+            if x.is_finite() && y.is_finite() && z.is_finite() && x.abs() < 6000.0 && y.abs() < 6000.0 {
+                let mut ev = vec![EV_MOVED];
+                ev.extend(format!("{x:.2},{y:.2},{z:.2}").bytes());
+                crate::send_raw_event(ev);
+            }
+        }
+    }
     if ATTACKS.contains(&op)
         && *s.add(S_MISSION) != 0
         && partner > 0

@@ -1550,6 +1550,27 @@ function onPicked(text) {
   } catch (e) { err(`[sa-coop] picked: ${e}`); }
 }
 
+// the host's mission moved its player (coopnet64.asi, EV 40): we come along, a step beside, into the same building
+const EV_MOVED = 40;
+function onMoved(text, me) {
+  if (!isGuest() || downed) return;
+  const v = text.split(",").map(Number);
+  if (v.length !== 3 || !v.every(Number.isFinite)) return;
+  try {
+    if (dist2(me.getCoordinates(), { x: v[0], y: v[1], z: v[2] }) < 8 * 8) return; // already there
+    const f = nearestFriend(me);
+    if (ridingOutside) getOffOutside(me);
+    if (me.isInAnyCar()) { const c = me.getCoordinates(); me.warpFromCarToCoord(c.x, c.y, c.z); }
+    const area = f ? (f.r.area || 0) : 0;
+    Streaming.SetAreaVisible(area);
+    me.setAreaVisible(area);
+    Streaming.RequestCollision(v[0], v[1]);
+    me.setCoordinates(v[0] + 1.5, v[1] + 1.0, v[2]);
+    if (area !== 0) { try { me.freezePosition(true); unfreezeAt = Date.now() + 1500; } catch (e) {} }
+    logx("[sa-coop] the host's mission moved its player: we came along");
+  } catch (e) { err(`[sa-coop] moved: ${e}`); }
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -1599,6 +1620,7 @@ function hearWorld(me) {
     else if (kind === EV_MYCAR) onMyCar(text);
     else if (kind === EV_PICKUPS) onPickups(text);
     else if (kind === EV_PICKED) onPicked(text);
+    else if (kind === EV_MOVED) onMoved(text, me);
     else if (kind === EV_CUTLOAD) onCutLoad(text, me);
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
@@ -2659,7 +2681,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.47", EV_VERSION = 21;
+const VERSION = "0.9.48", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;

@@ -72,6 +72,7 @@ Legend:
 - [~] A mission starts only with both players at its marker (0.9.13)
 - [~] The guest never starts a mission in its own game (0.9.31)
 - [~] The guest is taken to the host when a mission starts (0.9.14)
+- [~] The guest comes along whenever a mission moves the host's player (about 900 places in the 151 missions) (0.9.48)
 - [x] Mission cutscenes shown to the guest, with subtitles and sound
 - [~] The guest loads a cutscene together with the host (0.9.32)
 - [~] Skipping a cutscene needs both players (0.9.21, 0.9.30)
