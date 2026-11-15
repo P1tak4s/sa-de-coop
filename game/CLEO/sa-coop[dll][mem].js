@@ -822,7 +822,7 @@ function keyHints(me) {
     if (!key) return;
     Text.UseCommands(true); Text.SetFont(1); Text.SetScale(0.4, 1.6); Text.SetCenter(true);
     Text.SetColor(255, 255, 255, 255); Text.SetDropshadow(1, 0, 0, 0, 255);
-    Text.Display(320, 395, key);
+    Text.Display(320, 345, key); // above the game's own subtitles
   } catch (e) {}
 }
 
@@ -1168,9 +1168,28 @@ function storyTick(now) {
   if (msg !== lastBlipsSent) { lastBlipsSent = msg; sendEvent(EVS.BLIPS, msg || "-"); }
 }
 
+// The host's mission lines come as text keys, and a mission's texts are only in memory while that mission's table
+// is loaded: without it the guest read "INT2_CG missing!" (11-15). The table is named after the mission script.
+// Guarded by a marker in an ini file: if the game ever dies inside the load, the next run leaves it alone.
+const GUARD_INI = "sa-coop-guard.ini";
+let textTable = "", textOff = false;
+try { textOff = IniFile.ReadInt(GUARD_INI, "guard", "missiontext") === 1; if (textOff) log("[sa-coop] mission text: the load crashed last time, off"); } catch (e) {}
+function loadFriendText(mission) {
+  const table = String(mission || "").toUpperCase();
+  if (textOff || table === textTable || !/^[A-Z0-9_]{2,7}$/.test(table)) return;
+  textTable = table;
+  try {
+    IniFile.WriteInt(1, GUARD_INI, "guard", "missiontext");
+    Text.LoadMissionText(table);
+    IniFile.WriteInt(0, GUARD_INI, "guard", "missiontext");
+    log(`[sa-coop] mission text ${table} loaded`);
+  } catch (e) { log(`[sa-coop] mission text ${table}: ${e}`); }
+}
+
 function onStoryEvent(kind, text) {
   if (!isGuest()) return;
   if (kind === EVS.TEXT) {
+    loadFriendText(friendMission);
     const [key, ms] = text.split(":");
     if (/^[A-Z0-9_]{1,7}$/i.test(key)) { try { Text.PrintNow(key, Math.min(parseInt(ms, 10) || 4000, 15000), 1); } catch (e) {} }
   } else if (kind === EVS.BLIPS) {
