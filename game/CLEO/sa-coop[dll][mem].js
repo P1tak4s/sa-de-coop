@@ -172,7 +172,7 @@ function remoteWithCar(car) {
 // ---- our state ------------------------------------------------------------------------------------------
 function writeMine(me) {
   const p = me.getCoordinates();
-  let v = { x: 0, y: 0, z: 0 }, q = { x: 0, y: 0, z: 0, w: 1 }, carSpeed = 0, inCar = 0, carModel = 0, carHealth = 0;
+  let v = { x: 0, y: 0, z: 0 }, q = { x: 0, y: 0, z: 0, w: 1 }, carSpeed = 0, inCar = 0, carModel = 0, carHealth = 0, carColor = 0;
   if (ridingOutside && !Car.DoesExist(ridingOutside.car)) getOffOutside(me);
   if (ridingOutside) {
     const c = ridingOutside.car.getCoordinates();
@@ -196,6 +196,13 @@ function writeMine(me) {
       inCar = 1;
       carModel = car.getModel();
       carHealth = car.getHealth();
+      try { v = car.getSpeedVector(); } catch (e) {}
+      // colours ride along: primary in flags bits 24..31, secondary in carHealth bits 16..23, bit 24 = colours sent
+      try {
+        const cc = Object.values(car.getColors());
+        carColor = cc[0] & 0xff;
+        carHealth = (Math.max(0, carHealth) & 0xffff) | ((cc[1] & 0xff) << 16) | (1 << 24);
+      } catch (e) {}
     }
   } else {
     v = me.getVelocity();
@@ -217,6 +224,7 @@ function writeMine(me) {
   try { if (me.isShooting()) flags |= 2; } catch (e) {}
   try { flags |= Math.min(6, player.storeWantedLevel()) << 8; } catch (e) {}
   try { flags |= (api.coop_my_skin() & 0xff) << 16; } catch (e) {}
+  flags |= carColor << 24;
   Memory.WriteI32(mine + I.weapon, weapon, false, false);
   Memory.WriteI32(mine + I.flags, flags, false, false);
   api.coop_send(mine);
@@ -319,6 +327,7 @@ function removeRemote(slot) {
   const r = remotes[slot];
   if (!r) return;
   dropCar(r);
+  dropParked(r);
   try { r.blip.remove(); } catch (e) {}
   try { untrack(r.ped); r.ped.delete(); } catch (e) {}
   remotes[slot] = null;
@@ -329,21 +338,32 @@ function driveRemote(r, s, now) {
   if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; }
   if (!r.car || r.carModel !== s.carModel || !Car.DoesExist(r.car)) {
     dropCar(r);
-    if (!loadModel(s.carModel)) return;
-    r.car = track(Car.Create(s.carModel, s.x, s.y, s.z), 1, s.carModel);
-    Streaming.MarkModelAsNoLongerNeeded(s.carModel);
+    let back = false; // back into the car they left parked: the same copy, not a second one on top of it
+    try { back = !!r.parked && Car.DoesExist(r.parked) && r.parked.getModel() === s.carModel && dist2(r.parked.getCoordinates(), s) < 8 * 8; } catch (e) {}
+    if (back) { r.car = r.parked; r.parked = null; }
+    else {
+      dropParked(r);
+      if (!loadModel(s.carModel)) return;
+      r.car = track(Car.Create(s.carModel, s.x, s.y, s.z), 1, s.carModel);
+      Streaming.MarkModelAsNoLongerNeeded(s.carModel);
+    }
     r.car.setProofs(true, true, true, true, true);
+    if (s.carHealth & (1 << 24)) {
+      try { r.car.changeColor((s.flags >>> 24) & 0xff, (s.carHealth >>> 16) & 0xff); } catch (e) { log(`[sa-coop] colour: ${e}`); }
+    }
     r.carModel = s.carModel;
     leaveCar(r, s);
     r.ped.warpIntoCar(r.car);
     r.rx = null;
   }
-  // a new packet: remember where and when, and how fast it moved since the last one
+  // a new packet: remember where and when
   if (r.rx === null || s.x !== r.rx || s.y !== r.ry || s.z !== r.rz) {
-    if (r.rx !== null && now > r.rt) {
-      const dt = (now - r.rt) / 1000;
-      r.vx = (s.x - r.rx) / dt; r.vy = (s.y - r.ry) / dt; r.vz = (s.z - r.rz) / dt;
-    } else { r.vx = r.vy = r.vz = 0; }
+    const moved = r.rx !== null && now > r.rt;
+    const dx = moved ? (s.x - r.rx) / ((now - r.rt) / 1000) : 0, dy = moved ? (s.y - r.ry) / ((now - r.rt) / 1000) : 0;
+    // the sender's own car velocity: packet-to-packet deltas spike when Steam delivers two at once (11-15, VC test).
+    // An older build sends none while driving: then the delta, as before.
+    if (s.vx || s.vy || s.vz) { r.vx = s.vx; r.vy = s.vy; r.vz = s.vz; }
+    else { r.vx = dx; r.vy = dy; r.vz = 0; }
     r.rx = s.x; r.ry = s.y; r.rz = s.z; r.rt = now;
   }
   const ahead = Math.min((now - r.rt) / 1000, 0.3);
@@ -353,8 +373,10 @@ function driveRemote(r, s, now) {
   const err = Math.sqrt(ex * ex + ey * ey + ez * ez);
   const speed = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
   r.car.setQuaternion(s.qx, s.qy, s.qz, s.qw);
-  if (err > 2) {
-    r.car.setCoordinatesNoOffset(tx, ty, tz); // too far off: put it where it should be
+  // far off (a jump, a respawn): put it where it should be. The limit grows with speed: a fixed 2 m made a fast car
+  // jump on every late packet (11-15: "lags a lot" while driving)
+  if (err > 3 + speed * 0.2) {
+    r.car.setCoordinatesNoOffset(tx, ty, tz);
     const fx0 = 2 * (s.qx * s.qy - s.qw * s.qz), fy0 = 1 - 2 * (s.qx * s.qx + s.qz * s.qz);
     r.car.setForwardSpeed(r.vx * fx0 + r.vy * fy0 < 0 ? -speed : speed);
     return;
@@ -381,7 +403,7 @@ function driveRemote(r, s, now) {
 }
 
 function rideRemote(r, s, mySlot, me) {
-  if (r.car) dropCar(r);
+  if (r.car && !releaseCar(r, s)) return;
   const driverSlot = s.carModel;
   let car = null;
   if (driverSlot === mySlot) {
@@ -400,9 +422,43 @@ function rideRemote(r, s, mySlot, me) {
   } catch (e) { log(`[sa-coop] passenger: ${e}`); }
 }
 
+// Out of a car: first the copy gets out, only on a later frame the car is let go (parked, the game clears it later).
+// Deleting it in the same frame took the copy along (11-15, VC test: the friend vanished every time he left a car).
+function releaseCar(r, s) {
+  try {
+    if (r.ped.isInAnyCar()) { r.ped.warpFromCarToCoord(s.x, s.y, s.z); return false; }
+  } catch (e) {}
+  dropParked(r);
+  try {
+    if (Car.DoesExist(r.car)) {
+      // we rode along: out too, or we would report this driverless car as ours
+      const me = player.getChar(), c = r.car.getCoordinates();
+      if (me.isInAnyCar() && +me.storeCarIsInNoSave() === +r.car) me.warpFromCarToCoord(c.x + 2.5, c.y, c.z);
+      r.car.setMission(0); r.parked = r.car;
+    }
+  } catch (e) { log(`[sa-coop] release car: ${e}`); }
+  r.car = null; r.carModel = 0; r.rx = null;
+  return true;
+}
+
+// the car a friend got out of stays parked (still ours) so they can get back in; it goes when they are far from it,
+// take another car or leave. If we took it ourselves, the game keeps it.
+function dropParked(r) {
+  const car = r.parked;
+  r.parked = null;
+  try {
+    if (!car || !Car.DoesExist(car)) return;
+    untrack(car);
+    const me = player.getChar();
+    if (me.isInAnyCar() && +me.storeCarIsInNoSave() === +car) { car.setProofs(false, false, false, false, false); car.markAsNoLongerNeeded(); }
+    else car.delete();
+  } catch (e) { log(`[sa-coop] parked car: ${e}`); }
+}
+
 function walkRemote(r, s, now) {
   if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; }
-  if (r.car) dropCar(r);
+  if (r.car && !releaseCar(r, s)) return;
+  try { if (r.parked && (!Car.DoesExist(r.parked) || dist2(r.parked.getCoordinates(), s) > 150 * 150)) dropParked(r); } catch (e) {}
   leaveCar(r, s);
   if (!r.lastPos) { r.lastPos = { x: s.x, y: s.y }; r.lastT = now; r.speed = 0; r.ux = 0; r.uy = 0; }
   const mx = s.x - r.lastPos.x, my = s.y - r.lastPos.y, m = Math.sqrt(mx * mx + my * my);
@@ -429,8 +485,8 @@ function walkRemote(r, s, now) {
 }
 
 function downRemote(r, s, slot, me) {
+  if (r.car && !releaseCar(r, s)) return;
   leaveCar(r, s);
-  if (r.car) dropCar(r);
   if (!r.down) {
     r.down = true; r.hinted = false; r.downAt = Date.now(); r.holdStart = 0;
     r.ped.setCoordinatesNoOffset(s.x, s.y, s.z);
@@ -473,10 +529,16 @@ function armRemote(r, s, now) {
   }
 }
 
-// notoriety is shared: if a friend has more stars, we get them too (never lowered here)
-function shareWanted(s) {
-  const theirs = (s.flags >> 8) & 0xff;
-  try { if (theirs > player.storeWantedLevel()) player.alterWantedLevel(theirs); } catch (e) {}
+// notoriety is shared, but only changes travel: a friend gaining stars raises ours, a friend losing them lowers ours.
+// Copying the level itself (11-15: "cannot escape the cops") had each side hand the stars back to the one who lost them.
+function shareWanted(r, s) {
+  const theirs = (s.flags >> 8) & 0xff, before = r.wanted || 0;
+  r.wanted = theirs;
+  if (theirs === before) return;
+  try {
+    const ours = player.storeWantedLevel();
+    if (theirs > before ? theirs > ours : theirs < ours) player.alterWantedLevel(theirs);
+  } catch (e) {}
 }
 
 // the lowest slot keeps time for everyone; a jump of more than 2 minutes is corrected
@@ -506,7 +568,7 @@ function syncRemotes(me, mySlot, now) {
     try {
       if (r.area !== s.interior) { r.area = s.interior; r.ped.setAreaVisible(s.interior); if (r.car) r.car.setAreaVisible(s.interior); }
       if (slot < mySlot || mySlot < 0) followClock(s.clock);
-      shareWanted(s);
+      shareWanted(r, s);
       if (s.health >= 0) armRemote(r, s, now);
       if (s.health < 0) { downRemote(r, s, slot, me); continue; }
       if (r.down) { r.down = false; try { r.ped.clearTasksImmediately(); } catch (e) {} }

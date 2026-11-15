@@ -91,7 +91,7 @@ impl State {
         let model_ok = match s.in_car {
             0 => true,
             1 => (400..=611).contains(&s.car_model),
-            2 => (0..MAX_PLAYERS as i32).contains(&s.car_model) && (0..=2).contains(&s.car_health),
+            2 => (0..MAX_PLAYERS as i32).contains(&s.car_model) && ((0..=2).contains(&s.car_health) || s.car_health == 100), // 100 = riding outside
             _ => false,
         };
         (finite && in_world && model_ok).then_some(s)
@@ -210,6 +210,10 @@ mod tests {
         assert_eq!(State::from_bytes(&bad_model.to_bytes()), None);
         let passenger = State { in_car: 2, car_model: 0, car_health: 0, ..s };
         assert_eq!(State::from_bytes(&passenger.to_bytes()), Some(passenger));
+        let outside = State { in_car: 2, car_model: 0, car_health: 100, ..s }; // riding on the trunk
+        assert_eq!(State::from_bytes(&outside.to_bytes()), Some(outside));
+        let colours = State { car_health: 1000 | 200 << 16 | 1 << 24, flags: (255u32 << 24) as i32, ..s };
+        assert_eq!(State::from_bytes(&colours.to_bytes()), Some(colours));
         let bad_seat = State { in_car: 2, car_model: 7, ..s };
         assert_eq!(State::from_bytes(&bad_seat.to_bytes()), None);
     }
