@@ -116,7 +116,6 @@ function nameKey(slot, r) {
 // 11-08) showed no name at all in the first two-player test (11-15), so this is the projection that was seen working,
 // with the widescreen maths put right: the game's FOV is the horizontal one of a 4:3 picture and a wider screen
 // shows more at the sides (the first version treated it as the 16:9 one, so names slid away from the middle).
-const SCREEN_W = 0x531B218, SCREEN_H = 0x531B21C;
 function toScreen(p) {
   const cam = Camera.GetActiveCoordinates(), at = Camera.GetActivePointAt();
   let fx = at.x - cam.x, fy = at.y - cam.y, fz = at.z - cam.z;
@@ -126,15 +125,14 @@ function toScreen(p) {
   const dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
   const depth = dx * fx + dy * fy + dz * fz;
   if (depth < 1 || depth > 80) return null;
-  let aspect = 16 / 9;
-  try {
-    const w = Memory.ReadI32(SCREEN_W, false, true), h = Memory.ReadI32(SCREEN_H, false, true);
-    if (w >= 640 && w <= 8000 && h >= 360 && h <= 5000 && w / h > 1.2 && w / h < 4) aspect = w / h;
-  } catch (e) {}
-  const tanY = Math.tan((Camera.GetFov() * Math.PI / 180) / 2) * 0.75, tanX = tanY * aspect;
+  // Two test rounds settled it (11-08: right over a car, off over a ped; 11-15: right height, off to the side):
+  // the picture is as tall as a 4:3 one with this FOV and wider at the sides, and the text's 640 units across are
+  // the 4:3 middle of the screen, its 448 down the full height. So across uses the FOV as it is, down uses 3/4 of it.
+  const tanX = Math.tan((Camera.GetFov() * Math.PI / 180) / 2), tanY = tanX * 0.75;
   const sx = 320 + ((dx * rx + dy * ry) / depth / tanX) * 320;
   const sy = 224 - ((dx * ux + dy * uy + dz * uz) / depth / tanY) * 224;
-  return sx < 0 || sx > 640 || sy < 0 || sy > 448 ? null : { x: sx, y: sy - 8 }; // text is drawn from its top
+  // a wide screen shows more than the 640 units: up to a third beyond each side
+  return sx < -110 || sx > 750 || sy < 0 || sy > 448 ? null : { x: sx, y: sy - 8 }; // text is drawn from its top
 }
 
 function drawNames() {
