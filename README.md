@@ -52,6 +52,8 @@ Your friend does the same on their PC. The full walkthrough is in [Install (step
 
 ## Features
 
+What works, what is built but not yet tested, and what is left: [docs/TODO.md](docs/TODO.md).
+
 | | |
 | --- | --- |
 | **Co-op from the menu** | A **co-op** entry in the main and pause menus opens a screen styled like the game's options. Sessions are Steam lobbies found by name and password, worldwide, with no port forwarding. |
