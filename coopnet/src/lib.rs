@@ -490,7 +490,11 @@ pub unsafe extern "C" fn coop_flag(op: i64, name: *const u8) -> i64 {
 pub unsafe extern "C" fn coop_crash_line(out: *mut u8, max: i64) -> i64 {
     static LINES: Mutex<Option<Vec<String>>> = Mutex::new(None);
     let mut g = LINES.lock().unwrap();
-    let lines = g.get_or_insert_with(|| crash_report().unwrap_or_default());
+    let lines = g.get_or_insert_with(|| {
+        let mut l = crash_report().unwrap_or_default();
+        l.extend(windows_crash().unwrap_or_default());
+        l
+    });
     if lines.is_empty() || out.is_null() || max <= 1 {
         return 0;
     }
@@ -529,6 +533,32 @@ fn crash_report() -> Option<Vec<String>> {
     }
     Some(out)
 }
+/// The game's last crash as Windows recorded it (Application Error, event 1000): some crashes leave no report of
+/// the game's own (11-15 19:31: the friend's game died and nothing reached this side). Once per crash.
+fn windows_crash() -> Option<Vec<String>> {
+    use std::os::windows::process::CommandExt;
+    let out = std::process::Command::new("wevtutil")
+        .args(["qe", "Application", "/q:*[System[Provider[@Name='Application Error']]]", "/c:5", "/rd:true", "/f:text"])
+        .creation_flags(0x0800_0000) // no console window
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let ev = text.split("Event[").find(|e| e.contains("SanAndreas.exe"))?;
+    let field = |k: &str| ev.lines().find_map(|l| l.trim().strip_prefix(k).map(|v| v.trim().to_string())).unwrap_or_default();
+    let date = field("Date:");
+    let mark = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join(r"sa-de-coop\crash-event-reported.txt");
+    if date.is_empty() || std::fs::read_to_string(&mark).ok().as_deref() == Some(date.as_str()) {
+        return None;
+    }
+    let _ = std::fs::write(&mark, &date);
+    Some(vec![format!(
+        "CRASH (Windows) {date}: {} + {} code {}",
+        field("Faulting module name:").split(',').next().unwrap_or(""),
+        field("Fault offset:"),
+        field("Exception code:")
+    )])
+}
+
 fn w_name(w: &[&str]) -> String {
     w[0].to_string()
 }

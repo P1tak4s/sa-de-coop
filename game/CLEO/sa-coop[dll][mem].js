@@ -1563,7 +1563,11 @@ function mirrorMissionEntities(now) {
           for (const car of cars) {
             try { if (!Car.DoesExist(car)) continue; const d = dist2(car.getCoordinates(), { x, y, z }); if (d < bestD) { best = car; bestD = d; } } catch (e2) {}
           }
-          if (best) {
+          // not into a car we are getting into or next to on foot: a seat warped into while CJ opens its door is
+          // the guess for the guest's crash of 11-15 19:31 ("he gets into the car in a Ryder mission: crash")
+          let busy = false;
+          try { const me = player.getChar(); busy = !!best && !me.isInAnyCar() && dist2(me.getCoordinates(), best.getCoordinates()) < 7 * 7; } catch (e2) {}
+          if (best && !busy) {
             const seat = freeSeat(best);
             if (seat >= 0) { p.ent.warpIntoCarAsPassenger(best, seat); p.seated = best; }
           }
@@ -2414,7 +2418,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.36", EV_VERSION = 21;
+const VERSION = "0.9.37", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
