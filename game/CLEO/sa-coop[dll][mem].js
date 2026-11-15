@@ -503,6 +503,20 @@ function borrowedCar(r) {
 // other (11-15: "another car appears", "both cars go wrong when he gets in"). The copy is used instead.
 function adoptCopy(r, s) {
   try {
+    const slot = remotes.indexOf(r);
+    const known = copyByHandle(r, slot);
+    if (known && known.kind === "mission") {
+      r.car = known.ent; r.borrowed = true; r.borrowedProxy = known.h;
+      logx(`[sa-coop] friend drives the mission car we already show (${known.h}, by its id)`);
+      return true;
+    }
+    if (known && known.kind === "world") {
+      worldProxies.delete(known.h); takenFromHost.add(known.h);
+      try { if (known.driver && Char.DoesExist(known.driver)) { untrack(known.driver); known.driver.delete(); } } catch (e) {}
+      r.car = known.ent;
+      logx(`[sa-coop] friend drives a car of their traffic we already show (by its id)`);
+      return true;
+    }
     for (const [h, pr] of proxies) {
       if (pr.kind !== 1 || pr.model !== s.carModel || !Car.DoesExist(pr.ent)) continue;
       if (dist2(pr.ent.getCoordinates(), s) > 8 * 8) continue;
@@ -1424,6 +1438,34 @@ function onTrain(text, me) {
   }
 }
 
+// ---- which car is which, by its handle (CoopAndreas gives every car one network id) -------------------------------
+// Each game says the handle, in its own game, of the car its player drives. A friend's game finds its copy of that
+// car by the handle (a mission car or a car of the traffic it already shows) instead of guessing by model and place:
+// the guesses were where the doubled cars came from.
+const EV_MYCAR = 37;
+let myCarSent = -1, myCarSentAt = 0;
+function myCarTick(me, now) {
+  let h = 0;
+  try { if (me.isInAnyCar()) { const c = me.storeCarIsInNoSave(), d = c.getDriver(); if (d && +d === +me) h = +c; } } catch (e) {}
+  if (h !== myCarSent || now - myCarSentAt > 2000) { myCarSent = h; myCarSentAt = now; sendEvent(EV_MYCAR, `${api.coop_slot()}:${h}`); }
+}
+function onMyCar(text) {
+  const [slot, h] = text.split(":").map((v) => parseInt(v, 10));
+  const r = remotes[slot];
+  if (r && Number.isFinite(h)) r.carHandle = h;
+}
+// the copy of a friend's car we already show, found by its handle in their game
+function copyByHandle(r, slot) {
+  const h = r.carHandle;
+  if (!h) return null;
+  const pr = proxies.get(h);
+  if (pr && pr.kind === 1 && Car.DoesExist(pr.ent)) return { kind: "mission", h, ent: pr.ent };
+  const tagged = ((slot & 0xff) << 24) | (h & 0xffffff);
+  const wp = worldProxies.get(tagged);
+  if (wp && wp.kind === 1 && Car.DoesExist(wp.ent)) return { kind: "world", h: tagged, ent: wp.ent, driver: wp.driver };
+  return null;
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -1470,6 +1512,7 @@ function hearWorld(me) {
     else if (kind === EV_CAM) onCam(text, me);
     else if (kind === EV_RADIO) onRadio(text, me);
     else if (kind === EV_TRAIN) onTrain(text, me);
+    else if (kind === EV_MYCAR) onMyCar(text);
     else if (kind === EV_CUTLOAD) onCutLoad(text, me);
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
@@ -1595,7 +1638,8 @@ function mirrorMissionEntities(now) {
           let twin = null;
           for (const r of remotes) {
             if (!r || !r.car || r.borrowedProxy) continue;
-            try { if (Car.DoesExist(r.car) && r.car.getModel() === safeCarModel(model) && dist2(r.car.getCoordinates(), { x, y, z }) < 10 * 10) { twin = r; break; } } catch (e) {}
+            // by its id first (the friend said which car it drives), else by model and place
+            try { if (Car.DoesExist(r.car) && (r.carHandle === h || (r.car.getModel() === safeCarModel(model) && dist2(r.car.getCoordinates(), { x, y, z }) < 10 * 10))) { twin = r; break; } } catch (e) {}
           }
           if (twin) {
             proxies.set(h, { kind, ent: twin.car, model, blip: null, setHp: hp });
@@ -2415,6 +2459,8 @@ function armCopy(p, weapon, shooting, s, t) {
 function updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t) {
   let p = worldProxies.get(h);
   if (!p) {
+    const owner = remotes[(h >>> 24) & 0xff];
+    if (kind === 1 && owner && owner.car && owner.carHandle === (h & 0xffffff)) return; // their own car: shown already
     if (s.hp <= 0) return; // dead before we saw it
     if (kind === 1) {
       // a flashing-light vehicle the game has not loaded here is left out (see safeCarModel)
@@ -2513,7 +2559,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.40", EV_VERSION = 21;
+const VERSION = "0.9.41", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2772,6 +2818,7 @@ while (true) {
   iconsTick(now);
   radioTick(me, now);
   trainTick(me, now);
+  myCarTick(me, now);
   skipTick();
   camTick(now);
   friendLogTick(now);

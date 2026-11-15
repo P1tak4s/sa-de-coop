@@ -60,7 +60,8 @@ Legend:
 - [x] Friend at the wheel of the host's mission car
 - [~] No doubled cars: five causes fixed (0.9.4, 0.9.8, 0.9.22, 0.9.27, 0.9.32), not yet confirmed
 - [~] A mission car stays under its driver (0.9.22)
-- [ ] One owner per car (as CoopAndreas does): would remove the doubling for good
+- [~] Cars matched between the games by their id, not guessed by model and place (0.9.41)
+- [ ] One owner per car for every car (as CoopAndreas does)
 
 ## Missions
 
