@@ -340,8 +340,20 @@ function getUp(me, health) {
   me.setHealth(health);
 }
 
+// Just out of a car, cars cannot hurt us for a moment. The car we leave is at once put where its original stands in
+// the friend's game (a copy has no physics of its own), and the same goes for the copied traffic around: a car set
+// down on a player on foot kills at once (11-15: "he got out during the mission and it said wasted").
+let carWas = false, exitProofUntil = 0, diedSaid = false;
 function handleOwnHealth(me, now) {
   if (!downed) {
+    try {
+      const inCar = me.isInAnyCar(), hp = me.getHealth();
+      if (carWas && !inCar && !graceUntil && anyFriend()) { exitProofUntil = now + 4000; me.setProofs(false, false, false, true, false); }
+      if (exitProofUntil && now > exitProofUntil) { exitProofUntil = 0; if (!graceUntil) me.setProofs(false, false, false, false, false); }
+      if (hp <= 0 && !diedSaid && anyFriend()) { diedSaid = true; err(`[sa-coop] died: ${inCar ? "in a car" : "on foot"}, ${carWas !== inCar ? "just changed" : "no change"}, mission ${ONMISSION ? 1 : 0}/${friendMission || "-"}, copies ${proxies.size}+${worldProxies.size}`); }
+      if (hp > 0) diedSaid = false;
+      carWas = inCar;
+    } catch (e) {}
     if (graceUntil) {
       if (now < graceUntil) return;
       graceUntil = 0;
@@ -1403,7 +1415,8 @@ function catchUpTick(me, now) {
 const SRVA = { scriptSpace: 0x51BEAE0, onMission: 0x521C91C, brief: 0x531CB70, radar: 0x542A7B0 };
 const EVS = { TEXT: 6, BLIPS: 7, WORDS: 15, MORE: 16 };
 let lastBriefKey = "", lastBlipsSent = "", lastBlipsAt = 0, guestLocked = false;
-let guestBlips = [];
+let guestBlips = [], guestSpheres = [];
+function dropGuestSpheres() { for (const sp of guestSpheres) { try { sp.remove(); } catch (e) {} } guestSpheres = []; }
 
 function isGuest() { return api.coop_status() === 2 && !api.coop_is_host(); }
 
@@ -1417,7 +1430,7 @@ function lockGuestStory() {
   // The guest's own missions are refused in the DLL (CanPlayerStartMission). Release a lock left by older builds.
   const a = onMissionAddr();
   if (a && guestLocked) { guestLocked = false; Memory.WriteI32(a, 0, false, true); }
-  if (!isGuest() && guestBlips.length) { for (const b of guestBlips) { try { b.remove(); } catch (e) {} } guestBlips = []; }
+  if (!isGuest() && guestBlips.length) { for (const b of guestBlips) { try { b.remove(); } catch (e) {} } guestBlips = []; dropGuestSpheres(); }
   return;
   // inside a building (a safehouse with its save disk) the lock is off, so the guest can save its own game
   let inside = false;
@@ -1485,7 +1498,8 @@ function storyTick(now) {
       } catch (e2) {}
     }
     if (!pos || ![pos.x, pos.y, pos.z].every(Number.isFinite)) continue;
-    parts.push(`${pos.x.toFixed(0)},${pos.y.toFixed(0)},${pos.z.toFixed(0)},${Memory.ReadU32(e, false, true) & 0xff}`);
+    // the last number: 1 = a place (the guest also gets the red marker on the ground there), 0 = a car or a person
+    parts.push(`${pos.x.toFixed(0)},${pos.y.toFixed(0)},${pos.z.toFixed(1)},${Memory.ReadU32(e, false, true) & 0xff},${kind === 4 ? 1 : 0}`);
   }
   const msg = parts.join(";");
   if (msg !== lastBlipsSent) { lastBlipsSent = msg; sendEvent(EVS.BLIPS, msg || "-"); }
@@ -1531,11 +1545,15 @@ function onStoryEvent(kind, text) {
   } else if (kind === EVS.BLIPS) {
     for (const b of guestBlips) { try { b.remove(); } catch (e) {} }
     guestBlips = [];
+    dropGuestSpheres();
     if (text === "-") return;
     for (const p of text.split(";")) {
-      const [x, y, z, col] = p.split(",").map(Number);
+      const [x, y, z, col, place] = p.split(",").map(Number);
       if (![x, y, z].every(Number.isFinite)) continue;
       try { const b = Blip.AddForCoord(x, y, z); if (col <= 8) b.changeColor(col); guestBlips.push(b); } catch (e) {}
+      // the red marker on the ground where the mission wants the players: the guest had the dot on its map and
+      // nothing to drive into (11-15: "he sees where to go on the map but the red marker is not there")
+      if (place === 1) { try { guestSpheres.push(Sphere.Create(x, y, z, 4.0)); } catch (e) { err(`[sa-coop] marker: ${e}`); } }
     }
   }
 }
@@ -1933,7 +1951,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.6", EV_VERSION = 21;
+const VERSION = "0.9.7", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
