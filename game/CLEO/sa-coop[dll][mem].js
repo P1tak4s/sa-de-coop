@@ -1137,6 +1137,7 @@ function hearWorld(me) {
     else if (kind === EV_STORY) onStory(text, Date.now());
     else if (kind === EV_GUNS) onGuns(text);
     else if (kind === EV_TAG) onTag(text);
+    else if (kind === EV_ICONS) onIcons(text);
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, text && text !== "noname" && (lastFriendMission = text), true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
   }
@@ -1151,6 +1152,7 @@ const ENT_SIZE = 28, MAX_ENTS = 40;
 const entBuf = Memory.Allocate(ENT_SIZE * MAX_ENTS);
 const EVM = { HIT: 4, MONEY: 5 };
 let missionMoneyAt = null, lastEntsAt = 0, passedAt = "";
+let entsLostAt = 0;
 const proxies = new Map(); // owner handle -> { kind, ent, model, blip, setHp, seen }
 
 function ownMissionEntities() {
@@ -1211,7 +1213,15 @@ function dropProxy(h) {
 
 function mirrorMissionEntities(now) {
   const n = api.coop_ents_get(entBuf);
-  if (n < 0) { for (const h of [...proxies.keys()]) dropProxy(h); return; }
+  // Nothing heard for 2 s. The mission has ended (the friend said so, or left): the copies go. Otherwise the friend
+  // has only paused its game (ESC): the copies stay where they are. They used to go at once, with the mission car
+  // the guest sat in (11-15: "when I press ESC his car disappears").
+  if (n < 0) {
+    if (!entsLostAt) entsLostAt = now;
+    if (!friendMission || !anyFriend() || now - entsLostAt > 180000) for (const h of [...proxies.keys()]) dropProxy(h);
+    return;
+  }
+  entsLostAt = 0;
   const seen = new Set();
   for (let i = 0; i < n; i++) {
     const b = entBuf + i * ENT_SIZE;
@@ -1317,7 +1327,7 @@ function missionsTick(now) {
     if (missionMoneyAt !== null) {
       const earned = Memory.ReadI32(MRVA.money, false, true) - missionMoneyAt;
       const passed = readStr(0x523A158, 8, true) !== passedAt; // a failed mission pays nothing
-      if (earned > 0 && passed) sendEvent(EVM.MONEY, String(earned));
+      if (passed) sendEvent(EVM.MONEY, String(Math.max(0, earned))); // 0 = passed without pay: the guest still sees it
       missionMoneyAt = null;
     }
     mirrorMissionEntities(now);
@@ -1330,10 +1340,15 @@ function onMissionEvent(kind, text) {
     try { if (ONMISSION && Char.DoesExist(h)) { const c = new Char(h); c.setHealth(Math.max(0, c.getHealth() - dmg)); } } catch (e) {}
   } else if (kind === EVM.MONEY) {
     const earned = parseInt(text, 10);
-    if (earned > 0 && earned < 10000000) {
-      Memory.WriteI32(MRVA.money, Memory.ReadI32(MRVA.money, false, true) + earned, false, true);
-      say(`SA Co-op: mission passed, you got $${earned}`);
-    }
+    if (!(earned >= 0 && earned < 10000000)) return;
+    if (earned > 0) Memory.WriteI32(MRVA.money, Memory.ReadI32(MRVA.money, false, true) + earned, false, true);
+    // the game's own "MISSION PASSED! $... Respect +" with its tune: the guest got a small text box at most
+    // (11-15: "there is no mission passed, respect, for him")
+    try {
+      if (earned > 0) Text.PrintWithNumberBig("M_PASSS", earned, 5000, 1);
+      else Text.PrintBig("M_PASSR", 5000, 1);
+    } catch (e) { err(`[sa-coop] mission passed text: ${e}`); say(earned > 0 ? `SA Co-op: mission passed, you got $${earned}` : "SA Co-op: mission passed"); }
+    try { Audio.PlayMissionPassedTune(1); } catch (e) { err(`[sa-coop] mission passed tune: ${e}`); }
   }
 }
 
@@ -1455,6 +1470,7 @@ function lockGuestStory() {
   // The guest's own missions are refused in the DLL (CanPlayerStartMission). Release a lock left by older builds.
   const a = onMissionAddr();
   if (a && guestLocked) { guestLocked = false; Memory.WriteI32(a, 0, false, true); }
+  if (!isGuest() && guestIcons.length) { dropGuestIcons(); guestIconsText = ""; }
   if (!isGuest() && guestBlips.length) { for (const b of guestBlips) { try { b.remove(); } catch (e) {} } guestBlips = []; dropGuestSpheres(); }
   return;
   // inside a building (a safehouse with its save disk) the lock is off, so the guest can save its own game
@@ -1551,6 +1567,66 @@ function showGuestWords() {
     FxtStore.insert("COOPMS", guestWords);
     Text.PrintNow("COOPMS", guestWordsMs, 1);
   } catch (e) { err(`[sa-coop] mission line: ${e}`); }
+}
+
+// ---- where the host's missions start ------------------------------------------------------------------------------
+// The story runs in the host's game only, so after the first mission the guest's map showed old or no mission
+// icons (11-15: "he does not see where the missions start"). The host sends its mission icons (the map icons that
+// show from any distance: a contact's letter) and the guest gets the same icons with a red marker to stand in.
+// The host's game counts either player standing in the marker (coopnet64.asi), so either can start the mission.
+const EV_ICONS = 27;
+let iconsAt = 0, iconsSent = "", iconsSentAt = 0, guestIcons = [];
+function iconsTick(now) {
+  if (isGuest() || !anyFriend() || now - iconsAt < 2000) return;
+  iconsAt = now;
+  const parts = [];
+  try {
+    if (!ONMISSION) {
+      for (let i = 0; i < 250 && parts.length < 6; i++) {
+        const e = SRVA.radar + i * 0x30;
+        const fl = Memory.ReadU8(e + 0x29, false, true);
+        if (!(fl & 2) || (fl & 4)) continue; // not in use, or shown only close by (shops, safehouses)
+        const f = Memory.ReadU8(e + 0x2A, false, true), sprite = Memory.ReadU8(e + 0x28, false, true);
+        if (!(f & 3) || ((f >> 2) & 15) !== 4 || sprite === 0 || sprite === 41 || sprite > 63) continue; // 41 = the player's own waypoint
+        const x = Memory.ReadFloat(e + 8, false, true), y = Memory.ReadFloat(e + 12, false, true), z = Memory.ReadFloat(e + 16, false, true);
+        if (![x, y, z].every(Number.isFinite) || Math.abs(x) > 6000 || Math.abs(y) > 6000) continue;
+        parts.push(`${x.toFixed(1)},${y.toFixed(1)},${z.toFixed(1)},${sprite}`);
+      }
+    }
+  } catch (e) { err(`[sa-coop] icons: ${e}`); }
+  const msg = parts.join(";") || "-";
+  if (msg !== iconsSent || now - iconsSentAt > 15000) { iconsSent = msg; iconsSentAt = now; sendEvent(EV_ICONS, msg); }
+}
+function dropGuestIcons() {
+  for (const g of guestIcons) { try { g.blip.remove(); } catch (e) {} try { if (g.sphere) g.sphere.remove(); } catch (e) {} }
+  guestIcons = [];
+}
+let guestIconsText = "";
+function onIcons(text) {
+  if (!isGuest() || text === guestIconsText) return;
+  guestIconsText = text;
+  dropGuestIcons();
+  if (text === "-") return;
+  // our own game's icons: one that is already there (the two stories stand at the same point) is not doubled
+  const own = [];
+  try {
+    for (let i = 0; i < 250; i++) {
+      const e = SRVA.radar + i * 0x30;
+      if (!(Memory.ReadU8(e + 0x29, false, true) & 2)) continue;
+      own.push({ sprite: Memory.ReadU8(e + 0x28, false, true), x: Memory.ReadFloat(e + 8, false, true), y: Memory.ReadFloat(e + 12, false, true) });
+    }
+  } catch (e) {}
+  for (const p of text.split(";")) {
+    const [x, y, z, sprite] = p.split(",").map(Number);
+    if (![x, y, z].every(Number.isFinite) || !(sprite > 0 && sprite < 64)) continue;
+    if (own.some((o) => o.sprite === sprite && (o.x - x) ** 2 + (o.y - y) ** 2 < 15 * 15)) continue;
+    try {
+      const g = { blip: Blip.AddSpriteForContactPoint(x, y, z, sprite), sphere: null };
+      try { g.sphere = Sphere.Create(x, y, z, 1.5); } catch (e) {}
+      guestIcons.push(g);
+    } catch (e) { err(`[sa-coop] icon ${sprite}: ${e}`); }
+  }
+  log(`[sa-coop] the host's mission icons: ${guestIcons.length} added`);
 }
 
 function onStoryEvent(kind, text) {
@@ -1867,8 +1943,13 @@ function receiveWorldTick(me, t, guest) {
     const s = { x: f[0], y: f[1], z: f[2], heading: f[3], vx: f[4], vy: f[5], vz: f[6], hp: f[7] };
     try { updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t); } catch (e) { err(`[sa-coop] world ${h}: ${e}`); }
   }
+  // A copy not heard of for 1.5 s is gone in the friend's game. But when NOTHING was heard for that long while the
+  // friend stands outdoors, the friend has paused (ESC): everything stays, standing still, for up to 3 minutes.
+  let newest = 0;
+  for (const p of worldProxies.values()) if (p.seen > newest) newest = p.seen;
+  const paused = t - newest > 1500 && t - newest < 180000 && remotes.some((r) => r && (r.area || 0) === 0);
   for (const [h, p] of worldProxies) {
-    if (t - p.seen > 1500) { dropWorldProxy(h); continue; }
+    if (t - p.seen > 1500 && !(paused && newest - p.seen < 1500)) { dropWorldProxy(h); continue; }
     // we drove off in a copy: it is ours now, its owner removes the original
     if (p.kind === 1 && me.isInAnyCar()) {
       try {
@@ -2005,7 +2086,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.11", EV_VERSION = 21;
+const VERSION = "0.9.12", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2236,6 +2317,7 @@ while (true) {
   tagTick(me, now);
   keyHints(me);
   missionsTick(now);
+  iconsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
   catchUpTick(me, now);
   // F in a friend's car: straight out beside it (the car is moved every frame, which breaks the exit animation)

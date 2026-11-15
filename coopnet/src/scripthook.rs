@@ -170,6 +170,51 @@ static mut ORIG: [usize; 27] = [0; 27];
 static mut ORIG_CAN_START: Option<CanStart> = None;
 static mut BASE: usize = 0;
 
+// ---- which script is asking (11-15) --------------------------------------------------------------------------------
+// The places that start a story mission all look the same in the game's script: a check that the player stands in
+// the marker, CAN_PLAYER_START_MISSION, and soon after LOAD_AND_LAUNCH_MISSION_INTERNAL with a story mission's
+// number. Shops, gyms, odd jobs and the rest ask CAN_PLAYER_START_MISSION too, but start no story mission.
+// - The guest was refused everywhere, so it could not buy food, guns, clothes, a haircut or a tattoo. Now it is
+//   refused only where a story mission would start.
+// - The host's story markers now also count the partner standing in them, so either player can start a mission.
+const OP_CAN_START: u32 = 0x03EE;
+const SCRIPT_SPACE_LEN: usize = 269_000; // the main script and the running mission's block, as in the original game
+const SCAN: usize = 3000;
+/// -1 = not inside CAN_PLAYER_START_MISSION, 0 = asked by a script that starts no story mission, 1 = by one that does
+static STORY_CHECK: AtomicI32 = AtomicI32::new(-1);
+static mut STORY_CACHE: [(usize, bool); 64] = [(0, false); 64];
+
+/// Does the script code after `ip` start a story mission (numbers 11..=113) within the next few thousand bytes?
+/// None = `ip` is not in the game's own script space (a streamed shop script, a CLEO script): not looked at.
+unsafe fn launches_story(ip: usize) -> Option<bool> {
+    let start = BASE + SCRIPT_SPACE;
+    if BASE == 0 || ip < start || ip + SCAN + 8 > start + SCRIPT_SPACE_LEN {
+        return None;
+    }
+    let slot = (ip >> 1) % 64;
+    if STORY_CACHE[slot].0 == ip {
+        return Some(STORY_CACHE[slot].1);
+    }
+    let code = std::slice::from_raw_parts(ip as *const u8, SCAN + 8);
+    let mut found = false;
+    for i in 0..SCAN {
+        if code[i] == 0x17 && code[i + 1] == 0x04 {
+            let id = match code[i + 2] {
+                0x04 => code[i + 3] as i8 as i32,
+                0x05 => i16::from_le_bytes([code[i + 3], code[i + 4]]) as i32,
+                0x01 => i32::from_le_bytes([code[i + 3], code[i + 4], code[i + 5], code[i + 6]]),
+                _ => -1,
+            };
+            if (11..=113).contains(&id) {
+                found = true;
+                break;
+            }
+        }
+    }
+    STORY_CACHE[slot] = (ip, found);
+    Some(found)
+}
+
 fn connected() -> bool {
     crate::status_code() == 2
 }
@@ -180,14 +225,24 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
     let cond = *s.add(S_COND);
     let logic = *(s.add(S_LOGIC) as *const u16);
     let not = *s.add(S_NOT);
+    let asking = op == OP_CAN_START;
+    if asking {
+        // a mission's own script and scripts outside the game's script space start no story mission
+        let story = *s.add(S_MISSION) == 0 && launches_story(ip) == Some(true);
+        STORY_CHECK.store(story as i32, Ordering::Relaxed);
+    }
     let r = f(s, op);
+    if asking {
+        STORY_CHECK.store(-1, Ordering::Relaxed);
+    }
     run_native(s);
     // ask again for the partner: host only, mission scripts only, plain (not NOT-ed) checks that said no
     let partner = PARTNER_PED.load(Ordering::Relaxed);
     if partner > 0
         && not == 0
-        && *s.add(S_MISSION) != 0
         && *s.add(S_COND) == 0
+        // a mission's own checks, or the checks of a place that starts a story mission (its marker)
+        && (*s.add(S_MISSION) != 0 || (EITHER.contains(&op) && launches_story(ip) == Some(true)))
         && EITHER.contains(&op)
         && connected()
         && crate::is_host()
@@ -216,7 +271,12 @@ unsafe extern "C" fn can_start(ped: *mut u8) -> u8 {
         // guest when it joins, so the guest is not left without progress). Only while a host is really there.
         // ...and only when the guest is in the host's story (the script compares the two games' progress): a guest
         // that could not load the host's save was left unable to do anything at all (11-15)
-        if !crate::is_host() && crate::coop_friends() > 0 && GUEST_LOCK.load(Ordering::Relaxed) {
+        // ...and only where a story mission would start: shops, gyms, odd jobs ask the same question (STORY_CHECK)
+        if !crate::is_host()
+            && crate::coop_friends() > 0
+            && GUEST_LOCK.load(Ordering::Relaxed)
+            && STORY_CHECK.load(Ordering::Relaxed) != 0
+        {
             REFUSED.store(1, Ordering::Relaxed);
             return 0;
         }
