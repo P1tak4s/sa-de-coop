@@ -41,6 +41,11 @@ pub static PARTNER_NEAR: AtomicBool = AtomicBool::new(false);
 pub static REFUSED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// The hooks are in: this is the build of the game our addresses are for.
+pub fn installed() -> bool {
+    INSTALLED.load(Ordering::Relaxed)
+}
+
 // ---- a few commands run on the game's own thread (11-15) ---------------------------------------------------------
 // CLEO runs its scripts on a thread of its own. A command that makes the game build something new there (a
 // cutscene's actors) crashes the Definitive Edition: "AssembleReferenceTokenStream ... called on a non-game thread".
@@ -51,6 +56,66 @@ pub static GAME_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomic
 static NATIVE_QUEUE: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
 pub static NATIVE_DONE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 const NATIVE_ALLOWED: [u32; 2] = [0x02E7, 0x02EA]; // START_CUTSCENE, CLEAR_CUTSCENE
+
+// ---- the script's turn counts as the game thread (11-15) ---------------------------------------------------------
+// CLEO gives every script a thread of its own and runs one at a time while the game thread waits inside CLEO (seen
+// in a crash dump: the game thread blocked in cleo_redux64, the script's thread on top of the game's code). Unreal
+// compares the calling thread with GGameThreadId (RVA 0x5764170, checked in the running game: it holds the main
+// thread's id) and stops the game when something is built "on a non-game thread": a model, an interior, a cutscene's
+// actors, a vehicle's lights. While our script has its turn it writes its own thread id there and puts the real one
+// back before it waits. If a script ever stops without putting it back, the game thread does it itself (heal, called
+// from the menu hook, which runs on the game thread all the time).
+const GAME_THREAD_ID: usize = 0x5764170;
+const GAME_THREAD_ID_SET: usize = 0x5764159;
+static REAL_GAME_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static CLAIMED: AtomicBool = AtomicBool::new(false);
+
+unsafe fn game_thread_slot() -> Option<*mut u32> {
+    let base = windows_sys::Win32::System::LibraryLoader::GetModuleHandleA(std::ptr::null()) as usize;
+    if base == 0 || crate::game_build_ok() == false || *((base + GAME_THREAD_ID_SET) as *const u8) != 1 {
+        return None;
+    }
+    Some((base + GAME_THREAD_ID) as *mut u32)
+}
+
+/// The calling script thread becomes "the game thread" until release(). False = left alone (the game thread is not
+/// known yet, or the value there is not the thread the menu events come from: another build of the game).
+pub unsafe fn claim() -> bool {
+    let Some(p) = game_thread_slot() else { return false };
+    let me = windows_sys::Win32::System::Threading::GetCurrentThreadId();
+    let cur = std::ptr::read_volatile(p);
+    if cur == me {
+        return true;
+    }
+    let known = GAME_THREAD.load(Ordering::Relaxed);
+    if known == 0 || cur != known {
+        return false;
+    }
+    REAL_GAME_THREAD.store(known, Ordering::SeqCst);
+    std::ptr::write_volatile(p, me);
+    CLAIMED.store(true, Ordering::SeqCst);
+    true
+}
+
+pub unsafe fn release() {
+    if !CLAIMED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(p) = game_thread_slot() {
+        let real = REAL_GAME_THREAD.load(Ordering::SeqCst);
+        if real != 0 {
+            std::ptr::write_volatile(p, real);
+        }
+    }
+}
+
+/// On the game thread: a claim still standing means its script is not running any more (it waits or it is gone).
+pub unsafe fn heal() {
+    if CLAIMED.load(Ordering::Relaxed) && windows_sys::Win32::System::Threading::GetCurrentThreadId() == REAL_GAME_THREAD.load(Ordering::Relaxed) {
+        release();
+        crate::log_line("game thread: a script left its claim standing, put back");
+    }
+}
 
 pub fn queue_native(op: u32) -> bool {
     if !NATIVE_ALLOWED.contains(&op) || GAME_THREAD.load(Ordering::Relaxed) == 0 {

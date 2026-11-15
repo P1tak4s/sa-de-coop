@@ -488,6 +488,7 @@ unsafe fn string_props(obj: *const u8) -> Vec<(String, String)> {
 }
 
 unsafe extern "system" fn detour(this: *mut u8, func: *mut u8, parms: *mut u8) {
+    crate::scripthook::heal();
     if !func.is_null() {
         let f = func as usize;
         if CFS_FN == 0 || f == CFS_FN {

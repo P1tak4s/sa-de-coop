@@ -9,10 +9,23 @@ fn data_dir() -> Option<PathBuf> {
 }
 
 /// Documents\Rockstar Games\GTA San Andreas Definitive Edition\Profiles\<id>: the one with saves, else the first.
+/// Documents may be redirected to OneDrive, and there may be several profile folders: the one the game is using is
+/// the one with the most recently changed file (the game touches its profile data every time it starts). Before
+/// 11-15 this took Documents\...\Profiles and the first folder with saves: on a PC with OneDrive documents the
+/// host's save went into a folder the game never reads ("it says slot 9 but that slot is empty").
 fn profile_dir() -> Option<PathBuf> {
-    let root = PathBuf::from(std::env::var_os("USERPROFILE")?).join(r"Documents\Rockstar Games\GTA San Andreas Definitive Edition\Profiles");
-    let dirs: Vec<PathBuf> = std::fs::read_dir(&root).ok()?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
-    dirs.iter().find(|d| !saves_in(d).is_empty()).cloned().or_else(|| dirs.first().cloned())
+    let home = PathBuf::from(std::env::var_os("USERPROFILE")?);
+    let mut dirs: Vec<PathBuf> = vec![];
+    for docs in ["Documents", r"OneDrive\Documents"] {
+        let root = home.join(docs).join(r"Rockstar Games\GTA San Andreas Definitive Edition\Profiles");
+        if let Ok(rd) = std::fs::read_dir(&root) {
+            dirs.extend(rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+        }
+    }
+    let newest = |d: &PathBuf| {
+        std::fs::read_dir(d).ok().and_then(|rd| rd.flatten().filter_map(|e| e.metadata().and_then(|m| m.modified()).ok()).max())
+    };
+    dirs.into_iter().max_by_key(|d| newest(d))
 }
 
 fn saves_in(dir: &Path) -> Vec<PathBuf> {
@@ -42,11 +55,12 @@ pub fn receive_host_save(name: &str, bytes: &[u8]) -> Result<String, String> {
         switch_to("coop")?;
     }
     let profile = profile_dir().ok_or("game save folder not found")?;
-    std::fs::write(profile.join(name), bytes).map_err(|e| format!("could not write host save: {e}"))?;
-    let digits: String = name.trim_end_matches(".sav").chars().rev().take_while(|c| c.is_ascii_digit()).collect();
-    let slot: String = digits.chars().rev().collect();
-    crate::log_line(&format!("saves: host save {name} ({} bytes) written", bytes.len()));
-    Ok(format!("Host's save received: Load Game, slot {slot}"))
+    // always into slot 1: the host's newest save is often an autosave (GTASAsf9, GTASAsf10), which the Load Game
+    // list shows in its own row or not at all. The co-op set is empty at this point, so slot 1 is free.
+    let file = "GTASAsf1.sav";
+    std::fs::write(profile.join(file), bytes).map_err(|e| format!("could not write host save: {e}"))?;
+    crate::log_line(&format!("saves: host save {name} ({} bytes) written as {}", bytes.len(), profile.join(file).display()));
+    Ok("Host's save received: Esc, Load Game, slot 1".into())
 }
 
 pub fn mode() -> String {

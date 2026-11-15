@@ -434,6 +434,24 @@ impl SaveIn {
     }
 }
 
+/// This build of the game is the one our addresses are for (the script hook found its tables).
+pub(crate) fn game_build_ok() -> bool {
+    scripthook::installed()
+}
+
+/// The script's turn begins: its thread counts as the game thread (see scripthook). 1 = done.
+#[no_mangle]
+pub unsafe extern "C" fn coop_claim() -> i64 {
+    scripthook::claim() as i64
+}
+
+/// The script is about to wait: the real game thread is put back.
+#[no_mangle]
+pub unsafe extern "C" fn coop_release() -> i64 {
+    scripthook::release();
+    1
+}
+
 /// Leave a parameterless command for the game's own thread (see scripthook). 1 = queued, 0 = not allowed or the
 /// game thread is not known yet.
 #[no_mangle]

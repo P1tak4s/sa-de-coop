@@ -15,7 +15,7 @@ if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not fo
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -73,6 +73,30 @@ function banner(key, num, y) {
     Text.UseCommands(true); Text.SetFont(1); Text.SetScale(0.5, 2.0); Text.SetCenter(true);
     Text.SetColor(255, 80, 80, 255); Text.SetDropshadow(2, 0, 0, 0, 255);
     Text.DisplayWithNumber(320, y || 30, key, Math.max(0, Math.ceil(num)));
+  } catch (e) {}
+}
+
+// ---- this script's turn counts as the game thread ---------------------------------------------------------------
+// See coopnet/src/scripthook.rs: CLEO runs us on a thread of our own while the game thread waits, and the game
+// refuses to build anything "on a non-game thread". For our turn we are the game thread; before every wait the real
+// one is put back. Behind a marker: if the game dies in the first 20 s of the first claim, the next run goes without.
+const CLAIM_INI = "sa-coop-guard.ini";
+let claimOff = false, claimWanted = false, claimFrom = 0, claimSafe = false;
+try { claimOff = IniFile.ReadInt(CLAIM_INI, "guard", "claim") === 1; if (claimOff) log("[sa-coop] game thread claim: the game died right after one last time, off"); } catch (e) {}
+function pause(ms) {
+  try { api.coop_release(); } catch (e) {}
+  wait(ms);
+  if (!claimWanted || claimOff) return;
+  try {
+    if (api.coop_claim() === 1 && !claimFrom) {
+      claimFrom = Date.now();
+      try { IniFile.WriteInt(1, CLAIM_INI, "guard", "claim"); } catch (e) {}
+      log("[sa-coop] game thread claim: on");
+    }
+    if (claimFrom && !claimSafe && Date.now() - claimFrom > 20000) {
+      claimSafe = true;
+      try { IniFile.WriteInt(0, CLAIM_INI, "guard", "claim"); } catch (e) {}
+    }
   } catch (e) {}
 }
 
@@ -765,7 +789,7 @@ function nativeCall(op, timeoutMs) {
   try {
     const before = api.coop_native_done();
     if (!api.coop_native(op)) return false;
-    for (let i = 0; i < timeoutMs / 25; i++) { wait(25); if (api.coop_native_done() !== before) return true; }
+    for (let i = 0; i < timeoutMs / 25; i++) { pause(25); if (api.coop_native_done() !== before) return true; }
   } catch (e) { err(`[sa-coop] native ${op}: ${e}`); }
   return false;
 }
@@ -787,7 +811,7 @@ function playCutscene(text, me) {
     try { Text.ClearHelp(); } catch (e) {}
     loadFriendText(friendMission); // its subtitles
     Cutscene.Load(name);
-    for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) wait(25);
+    for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) pause(25);
     if (Cutscene.HasLoaded()) {
       try { IniFile.WriteInt(1, GUARD_INI, "guard", "cutscene"); } catch (e) {}
       started = nativeCall(0x02E7, 2000);
@@ -795,7 +819,7 @@ function playCutscene(text, me) {
         const from = Date.now();
         let cleared = false;
         while (!Cutscene.HasFinished()) {
-          wait(0);
+          pause(0);
           // it has been running for 3 s: the start did not kill the game
           if (!cleared && Date.now() - from > 3000) { cleared = true; try { IniFile.WriteInt(0, GUARD_INI, "guard", "cutscene"); } catch (e) {} }
         }
@@ -1673,7 +1697,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.13", EV_VERSION = 21;
+const VERSION = "0.8.14", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -1739,7 +1763,7 @@ function sharedWorldTick(me, t) {
 let started = false, announced = -1, lastCode = "", lastCodeCheck = 0;
 
 while (true) {
-  wait(0);
+  pause(0);
   if (!player.isPlaying()) continue;
   const now = Date.now();
 
@@ -1755,6 +1779,7 @@ while (true) {
   }
 
   const status = api.coop_status();
+  claimWanted = status === 2; // only in a session: alone the script makes nothing
   if (status !== announced) {
     announced = status;
     if (status === 2) say("SA Co-op: connected");
