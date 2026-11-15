@@ -218,6 +218,25 @@ unsafe fn launches_story(ip: usize) -> Option<bool> {
     Some(found)
 }
 
+/// Is `handle` a character that exists right now? The game's own commands look a handle up in the ped pool and many
+/// do not check the answer: asked about the partner's copy just after it died, IS_CHAR_IN_AREA read from address
+/// 0x634 and the game was gone (crash of 11-15 17:22, the handler at 0x10B7DDB). The same lookup, done first.
+const PED_POOL: usize = 0x572B5A0;
+unsafe fn ped_exists(handle: i32) -> bool {
+    if handle < 0 || BASE == 0 {
+        return false;
+    }
+    let pool = *((BASE + PED_POOL) as *const *const u8);
+    if pool.is_null() {
+        return false;
+    }
+    let objects = *(pool as *const *const u8);
+    let flags = *(pool.add(8) as *const *const u8);
+    let size = *(pool.add(0x10) as *const i32);
+    let idx = handle >> 8;
+    !objects.is_null() && !flags.is_null() && idx < size && *flags.add(idx as usize) == (handle & 0xFF) as u8
+}
+
 fn connected() -> bool {
     crate::status_code() == 2
 }
@@ -242,6 +261,7 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
     // ask again for the partner: host only, mission scripts only, plain (not NOT-ed) checks that said no
     let partner = PARTNER_PED.load(Ordering::Relaxed);
     if partner > 0
+        && ped_exists(partner)
         && not == 0
         && *s.add(S_COND) == 0
         // a mission's own checks, or the checks of a place that starts a story mission (its marker)
