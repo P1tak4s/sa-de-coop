@@ -10,8 +10,15 @@ for (const path of ["coopnet64.asi", "../coopnet64.asi"]) {
   lib = DynamicLibrary.Load(path);
   if (lib) break;
 }
-if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not found"); }
+if (!lib) { logx("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not found"); }
 
+// Every line this script logs is also sent to the friends (who write it as "[friend] ..."), a few a second: what
+// went wrong in the other game could not be seen from here, only its errors and a status line (11-15).
+const friendLog = [];
+function logx(text) {
+  log(text);
+  try { if (friendLog.length < 60 && !/name \d+:|world: sending|^\[friend\]/.test(text)) friendLog.push(String(text)); } catch (e) {}
+}
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
@@ -51,7 +58,7 @@ function untrack(ent) { try { api.coop_untrack(+ent); } catch (e) {} }
     } catch (e) {}
   }
   Memory.Free(out);
-  if (n) log(`[sa-coop] removed ${n} leftovers of the previous run`);
+  if (n) logx(`[sa-coop] removed ${n} leftovers of the previous run`);
 }
 const SKINS = [105, 106, 107, 105]; // Grove Street looks until we sync clothes
 const DOWN_AT = 40;                 // health below this: down instead of dead (one AK hit would skip a lower mark)
@@ -91,7 +98,7 @@ function flag(op, name) {
   } catch (e) { return 0; }
 }
 let claimOff = false, claimWanted = false, claimFrom = 0, claimSafe = false;
-try { claimOff = flag(0, "claim") === 1; if (claimOff) log("[sa-coop] game thread claim: the game died right after one last time, off"); } catch (e) {}
+try { claimOff = flag(0, "claim") === 1; if (claimOff) logx("[sa-coop] game thread claim: the game died right after one last time, off"); } catch (e) {}
 function pause(ms) {
   try { api.coop_release(); } catch (e) {}
   wait(ms);
@@ -100,7 +107,7 @@ function pause(ms) {
     if (api.coop_claim() === 1 && !claimFrom) {
       claimFrom = Date.now();
       try { flag(1, "claim"); } catch (e) {}
-      log("[sa-coop] game thread claim: on");
+      logx("[sa-coop] game thread claim: on");
     }
     if (claimFrom && !claimSafe && Date.now() - claimFrom > 20000) {
       claimSafe = true;
@@ -114,7 +121,7 @@ const remotes = [null, null, null, null];
 let downed = false, downedAt = 0, downWeapon = 0;
 
 // ---- small helpers ------------------------------------------------------------------------------------
-function say(text) { if (!text) return; try { showTextBox(text); } catch (e) {} log(`[sa-coop] ${text}`); }
+function say(text) { if (!text) return; try { showTextBox(text); } catch (e) {} logx(`[sa-coop] ${text}`); }
 
 const keyWas = {};
 function pressed(code) { // true once per press
@@ -177,7 +184,7 @@ function drawNames() {
     const at = toScreen(head);
     if (Date.now() - (r.nameDiagAt || 0) > 15000) { // for logs after a test: is the name placed, and where
       r.nameDiagAt = Date.now();
-      log(`[sa-coop] name ${slot}: ${at ? `drawn at ${at.x.toFixed(0)}, ${at.y.toFixed(0)}` : "not on screen"}`);
+      logx(`[sa-coop] name ${slot}: ${at ? `drawn at ${at.x.toFixed(0)}, ${at.y.toFixed(0)}` : "not on screen"}`);
     }
     if (!at) continue;
     const key = nameKey(slot, r);
@@ -344,7 +351,16 @@ function getUp(me, health) {
 // the friend's game (a copy has no physics of its own), and the same goes for the copied traffic around: a car set
 // down on a player on foot kills at once (11-15: "he got out during the mission and it said wasted").
 let carWas = false, exitProofUntil = 0, diedSaid = false;
+// While a friend's cutscene runs (ours may end sooner or not start at all) nothing can hurt us: the mission's enemies
+// stand around the player who cannot move or see them.
+let shieldUntil = 0;
+function shield(me, ms) { shieldUntil = Date.now() + ms; try { me.setProofs(true, true, true, true, true); } catch (e) {} }
 function handleOwnHealth(me, now) {
+  if (shieldUntil && !downed) {
+    if (now < shieldUntil) return;
+    shieldUntil = 0;
+    try { me.setProofs(false, false, false, false, false); } catch (e) {}
+  }
   if (!downed) {
     try {
       const inCar = me.isInAnyCar(), hp = me.getHealth();
@@ -389,7 +405,7 @@ function spawnPed(slot, s) {
   ped.setKeepTask(true);
   const blip = Blip.AddForChar(ped);
   try { blip.setAsFriendly(true); blip.changeDisplay(2); } catch (e) {} // map and radar only: the name is over the head
-  log(`[sa-coop] friend ${slot} appeared`);
+  logx(`[sa-coop] friend ${slot} appeared`);
   return { ped, car: null, carModel: 0, blip, lastTask: 0, lostAt: 0, lastPos: null, rx: null, down: false, hinted: false, look };
 }
 
@@ -454,7 +470,7 @@ function adoptCopy(r, s) {
       if (pr.kind !== 1 || pr.model !== s.carModel || !Car.DoesExist(pr.ent)) continue;
       if (dist2(pr.ent.getCoordinates(), s) > 8 * 8) continue;
       r.car = pr.ent; r.borrowed = true; r.borrowedProxy = h; // the mission mirror keeps owning it
-      log(`[sa-coop] friend drives the mission car we already show (${h})`);
+      logx(`[sa-coop] friend drives the mission car we already show (${h})`);
       return true;
     }
     for (const [h, pr] of worldProxies) {
@@ -463,7 +479,7 @@ function adoptCopy(r, s) {
       worldProxies.delete(h); takenFromHost.add(h); // ours to move from now on
       try { if (pr.driver && Char.DoesExist(pr.driver)) { untrack(pr.driver); pr.driver.delete(); } } catch (e) {}
       r.car = pr.ent;
-      log(`[sa-coop] friend drives a car of their traffic we already show (${h})`);
+      logx(`[sa-coop] friend drives a car of their traffic we already show (${h})`);
       return true;
     }
     // A car of our own game standing right there: the friend took OUR car (one we parked, or one they rode in with
@@ -478,7 +494,7 @@ function adoptCopy(r, s) {
       const d = c.getDriver();
       if (d && +d > 0 && Char.DoesExist(+d)) continue;
       r.car = track(c, 1, s.carModel);
-      log(`[sa-coop] friend drives a car of our own game (${+c})`);
+      logx(`[sa-coop] friend drives a car of our own game (${+c})`);
       return true;
     }
   } catch (e) { err(`[sa-coop] adopt: ${e}`); }
@@ -518,7 +534,7 @@ function removeRemote(slot) {
   try { r.blip.remove(); } catch (e) {}
   try { untrack(r.ped); r.ped.delete(); } catch (e) {}
   remotes[slot] = null;
-  log(`[sa-coop] friend ${slot} left`);
+  logx(`[sa-coop] friend ${slot} left`);
 }
 
 // One frame of a copied car: a part of the way to where the original is now. `g` = its last known place, speed and
@@ -548,7 +564,7 @@ function driveRemote(r, s, now) {
       r.car = real; r.borrowed = true; r.carModel = s.carModel; r.rx = null;
       leaveCar(r, s);
       try { r.ped.warpIntoCar(r.car); } catch (e) { err(`[sa-coop] mission car: ${e}`); }
-      log(`[sa-coop] friend drives our mission car ${+real}`);
+      logx(`[sa-coop] friend drives our mission car ${+real}`);
     } else return; // somebody of ours is at its wheel: no second car on top of it
   } else if (!real && r.borrowed && !r.borrowedProxy) dropCar(r);
   // a mission copy we borrowed is gone (the mission ended): nothing to drive
@@ -557,7 +573,7 @@ function driveRemote(r, s, now) {
     dropCar(r);
     let back = false; // back into the car they left parked: the same copy, not a second one on top of it
     try { back = !!r.parked && Car.DoesExist(r.parked) && r.parkedModel === s.carModel && dist2(r.parked.getCoordinates(), s) < 8 * 8; } catch (e) {}
-    if (back) { r.car = r.parked; r.parked = null; log("[sa-coop] friend is back in the parked car"); }
+    if (back) { r.car = r.parked; r.parked = null; logx("[sa-coop] friend is back in the parked car"); }
     else if (adoptCopy(r, s)) dropParked(r);
     else {
       dropParked(r);
@@ -565,7 +581,7 @@ function driveRemote(r, s, now) {
       if (!loadModel(use)) return;
       r.car = track(Car.Create(use, s.x, s.y, s.z), 1, use);
       Streaming.MarkModelAsNoLongerNeeded(use);
-      log(`[sa-coop] friend's car ${s.carModel}${use !== s.carModel ? ` (shown as ${use}: its lights are not loaded here)` : ""} created: handle ${+r.car}`);
+      logx(`[sa-coop] friend's car ${s.carModel}${use !== s.carModel ? ` (shown as ${use}: its lights are not loaded here)` : ""} created: handle ${+r.car}`);
     }
     r.car.setProofs(true, true, true, true, true);
     if (s.carHealth & (1 << 24)) {
@@ -655,8 +671,8 @@ function releaseCar(r, s) {
       // a passenger stays in (11-15: "when my friend gets out I am thrown out too"): the parked car still counts
       // as that friend's, see remoteWithCar
       r.car.setMission(0); r.parked = r.car; r.parkedModel = r.carModel;
-      log(`[sa-coop] friend left the car: ${+r.car} stays parked`);
-    } else log("[sa-coop] friend left the car: the copy was already gone");
+      logx(`[sa-coop] friend left the car: ${+r.car} stays parked`);
+    } else logx("[sa-coop] friend left the car: the copy was already gone");
   } catch (e) { err(`[sa-coop] release car: ${e}`); }
   r.car = null; r.carModel = 0; r.rx = null;
   return true;
@@ -669,8 +685,8 @@ function dropParked(r) {
   r.parked = null;
   try {
     if (!car) return;
-    if (!Car.DoesExist(car)) { log(`[sa-coop] parked car ${+car}: the game removed it`); return; }
-    log(`[sa-coop] parked car ${+car} removed`);
+    if (!Car.DoesExist(car)) { logx(`[sa-coop] parked car ${+car}: the game removed it`); return; }
+    logx(`[sa-coop] parked car ${+car} removed`);
     untrack(car);
     const me = player.getChar();
     if (me.isInAnyCar() && +me.storeCarIsInNoSave() === +car) { car.setProofs(false, false, false, false, false); car.markAsNoLongerNeeded(); }
@@ -938,12 +954,12 @@ function tellWorld(mySlot, now) {
 // 11-15). A marker in an ini file guards it: if the game dies during a start, the next run only says that the
 // friend is watching one. The interior it plays in is shown; the game streams the place itself.
 let cutOff = false;
-try { cutOff = flag(0, "cutscene") === 1; if (cutOff) log("[sa-coop] cutscenes: the game died during one last time, off"); } catch (e) {}
+try { cutOff = flag(0, "cutscene") === 1; if (cutOff) logx("[sa-coop] cutscenes: the game died during one last time, off"); } catch (e) {}
 // A mission's texts (its lines and its cutscenes' subtitles) are only in memory while that mission's text table is
 // loaded, and the guest runs no mission: a cutscene played here showed "INT2_FA missing!" for every subtitle
 // (11-15). The table is named after the mission script. Behind the same kind of marker as the cutscenes.
 let textTable = "", textOff = false;
-try { textOff = flag(0, "missiontext") === 1; if (textOff) log("[sa-coop] mission text: the game died loading one last time, off"); } catch (e) {}
+try { textOff = flag(0, "missiontext") === 1; if (textOff) logx("[sa-coop] mission text: the game died loading one last time, off"); } catch (e) {}
 function loadFriendText(mission, again) {
   const table = String(mission || "").toUpperCase();
   if (textOff || (table === textTable && !again) || !/^[A-Z0-9_]{2,7}$/.test(table) || table === "NONAME") return;
@@ -952,7 +968,7 @@ function loadFriendText(mission, again) {
     flag(1, "missiontext");
     Text.LoadMissionText(table);
     flag(2, "missiontext");
-    log(`[sa-coop] mission text ${table} loaded`);
+    logx(`[sa-coop] mission text ${table} loaded`);
   } catch (e) { err(`[sa-coop] mission text ${table}: ${e}`); }
 }
 
@@ -967,6 +983,7 @@ function nativeCall(op, timeoutMs) {
 function playCutscene(text, me) {
   const [name, a, x, y, z] = text.split("|");
   if (!/^[A-Za-z0-9_]{2,24}$/.test(name) || (ONMISSION && !isGuest()) || downed) return;
+  shield(me, 90000); // until theirs ends (EV_CUTEND), at most a minute and a half
   if (cutOff) { say("SA Co-op: your friend is watching a cutscene"); return; }
   // In a car (a mission's later cutscenes come after a drive): out of it first. It used to be skipped without a
   // word, so the guest saw a mission's first cutscene and only the dialogue lines of the next ones (11-15).
@@ -998,7 +1015,7 @@ function playCutscene(text, me) {
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) pause(25);
     // theirs is over or the next one has begun while ours was still loading: not started at all
     const early = pollCut();
-    if (Cutscene.HasLoaded() && (early.ended || early.next)) { started = true; log(`[sa-coop] cutscene ${name}: over in the friend's game before it loaded here`); }
+    if (Cutscene.HasLoaded() && (early.ended || early.next)) { started = true; logx(`[sa-coop] cutscene ${name}: over in the friend's game before it loaded here`); }
     else if (Cutscene.HasLoaded()) {
       try { flag(1, "cutscene"); } catch (e) {}
       started = nativeCall(0x02E7, 2000);
@@ -1018,8 +1035,8 @@ function playCutscene(text, me) {
         }
         // we skipped ours while theirs still runs: tell them
         if (!cut && !theirsEnded) { try { if (Cutscene.WasSkipped()) sendEvent(EV_CUTSKIP, "1"); } catch (e) {} }
-        log(`[sa-coop] cutscene ${name} ${cut ? "ended with the friend's" : "played"}`);
-      } else log(`[sa-coop] cutscene ${name}: the game's own thread did not take the start, not shown`);
+        logx(`[sa-coop] cutscene ${name} ${cut ? "ended with the friend's" : "played"}`);
+      } else logx(`[sa-coop] cutscene ${name}: the game's own thread did not take the start, not shown`);
       try { flag(2, "cutscene"); } catch (e) {}
     }
     if (!nativeCall(0x02EA, 2000)) Cutscene.Clear();
@@ -1063,7 +1080,7 @@ function onStats(text) {
     SKILL_F.forEach((id, i) => { if (v[i] > Stat.GetFloat(id) + 0.5) { Stat.SetFloat(id, v[i]); raised.push(id); } });
     SKILL_I.forEach((id, i) => { const t = Math.round(v[SKILL_F.length + i]); if (t > Stat.GetInt(id)) { Stat.SetInt(id, t); raised.push(id); } });
   } catch (e) { err(`[sa-coop] skills from a friend: ${e}`); }
-  if (raised.length) log(`[sa-coop] skills raised to your friend's: ${raised.join(", ")}`);
+  if (raised.length) logx(`[sa-coop] skills raised to your friend's: ${raised.join(", ")}`);
 }
 
 // ---- which key does what, shown while it applies -----------------------------------------------------------------
@@ -1152,12 +1169,28 @@ function pollCut() {
   let kind;
   while ((kind = api.coop_event_poll(evBuf)) > 0) {
     const text = readStr(evBuf, 127, false);
-    if (kind === EV_CUTEND) { out.ended = true; if (text === "1") out.skip = true; }
+    if (kind === EV_CUTEND) { out.ended = true; if (text === "1") out.skip = true; if (shieldUntil) shieldUntil = Date.now() + 2000; }
     else { if (kind === EV.CUTSCENE) out.next = true; if (deferred.length < 600) deferred.push({ kind, text }); }
   }
   return out;
 }
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
+
+// A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
+// Row 2): left at the other end of the map it saw nothing of the mission and could not take part.
+function onFriendMission(text, me) {
+  friendMission = text;
+  const started = !!text && text !== "noname";
+  if (started) lastFriendMission = text;
+  if (!text) { say("SA Co-op: your friend's mission ended"); return; }
+  if (!started) return;
+  try {
+    const f = nearestFriend(me);
+    const far = !f || dist2(me.getCoordinates(), f.r.ped.getCoordinates()) > 30 * 30 || me.getAreaVisible() !== (f.r.area || 0);
+    if (isGuest() && f && far && !downed) { jumpToFriend(me); say("SA Co-op: your friend started a mission: you were taken to them"); }
+    else say(isGuest() ? "SA Co-op: your friend started a mission" : "SA Co-op: your friend started a mission. Press J to join them");
+  } catch (e) { err(`[sa-coop] mission start: ${e}`); }
+}
 
 function hearWorld(me) {
   let kind;
@@ -1180,10 +1213,11 @@ function hearWorld(me) {
     else if (kind === EV_GUNS) onGuns(text);
     else if (kind === EV_TAG) onTag(text);
     else if (kind === EV_ICONS) onIcons(text);
+    else if (kind === EV_CUTEND) { if (shieldUntil) shieldUntil = Date.now() + 2000; }
     else if (kind === EV_SAY) say(text.replace(/`/g, " "));
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
-    else if (kind === EV.MISSION && (friendMission = text, text && text !== "noname" && (lastFriendMission = text), true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
+    else if (kind === EV.MISSION) onFriendMission(text, me);
   }
 }
 
@@ -1670,7 +1704,7 @@ function onIcons(text) {
       guestIcons.push(g);
     } catch (e) { err(`[sa-coop] icon ${sprite}: ${e}`); }
   }
-  log(`[sa-coop] the host's mission icons: ${guestIcons.length} added`);
+  logx(`[sa-coop] the host's mission icons: ${guestIcons.length} added`);
 }
 
 // ---- a friend on the map: an icon of the game's own (CJ's head; a car while they drive) instead of the plain
@@ -1741,7 +1775,7 @@ function tellPartner(me) {
 }
 
 // ---- main loop ------------------------------------------------------------------------------------------
-log("[sa-coop] loaded");
+logx("[sa-coop] loaded");
 // ---- one world for both (11-15, from the Vice City build) ---------------------------------------------------------
 // Near the host, the guest's game makes no peds or traffic of its own: the host sends its ordinary peds and cars
 // around the guest (WORLD, about 8 times a second) and the guest shows copies of them. Far from the host the guest's
@@ -1884,7 +1918,7 @@ function sendWorldTick(me, t, guest) {
     f.forEach((x, k) => Memory.WriteFloat(b + 12 + k * 4, Number.isFinite(x) ? x : 0, false, false));
   });
   api.coop_world_send(worldBuf, list.length);
-  if (t - worldDiagAt > 10000) { worldDiagAt = t; log(`[sa-coop] world: sending ${list.length}, showing ${worldProxies.size} copies`); }
+  if (t - worldDiagAt > 10000) { worldDiagAt = t; logx(`[sa-coop] world: sending ${list.length}, showing ${worldProxies.size} copies`); }
 }
 
 // an event about one of our own peds or cars: the handle carries the owner's slot
@@ -1973,7 +2007,7 @@ function clearLocalPopulation(me) {
   });
   for (const c of peds) { try { c.delete(); } catch (e) {} }
   for (const { car, d } of cars) { try { d.delete(); car.delete(); } catch (e) {} }
-  for (const car of twins) { try { log(`[sa-coop] world: our own parked car ${car.getModel()} removed, the host's stands there`); car.delete(); } catch (e) {} }
+  for (const car of twins) { try { logx(`[sa-coop] world: our own parked car ${car.getModel()} removed, the host's stands there`); car.delete(); } catch (e) {} }
   return peds.length + cars.length;
 }
 function guestModeTick(me, t) {
@@ -1981,7 +2015,7 @@ function guestModeTick(me, t) {
   const mp = me.getCoordinates();
   const near = outside() && remotes.some((r) => r && Char.DoesExist(r.ped) && dist2(mp, r.ped.getCoordinates()) < SHARE_NEAR * SHARE_NEAR);
   if (near !== sharedMode || t - lastDensityAt > 5000) {
-    if (near !== sharedMode) log(`[sa-coop] world: ${near ? "shared with the host" : "own (far from the host or indoors)"}`);
+    if (near !== sharedMode) logx(`[sa-coop] world: ${near ? "shared with the host" : "own (far from the host or indoors)"}`);
     sharedMode = near; lastDensityAt = t;
     setPopulation(!near);
     if (!near) for (const h of [...worldProxies.keys()]) dropWorldProxy(h);
@@ -1989,7 +2023,7 @@ function guestModeTick(me, t) {
   if (sharedMode && t - lastLocalClear > 500) {
     lastLocalClear = t;
     const n = clearLocalPopulation(me);
-    if (n > 20) log(`[sa-coop] world: ${n} of our own peds and cars removed`);
+    if (n > 20) logx(`[sa-coop] world: ${n} of our own peds and cars removed`);
   }
 }
 function receiveWorldTick(me, t, guest) {
@@ -2152,7 +2186,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.13", EV_VERSION = 21;
+const VERSION = "0.9.14", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2198,6 +2232,13 @@ function err(text) {
     sendEvent(EV_LOG, text.replace(/^\[sa-coop\] /, "E:").replace(/ /g, "`").slice(0, 118));
   } catch (e) {}
 }
+let friendLogAt = 0;
+function friendLogTick(t) {
+  if (!friendLog.length || t - friendLogAt < 350) return;
+  friendLogAt = t;
+  if (!anyFriend()) { friendLog.length = 0; return; }
+  try { sendEvent(EV_LOG, friendLog.shift().replace(/^\[sa-coop\] /, "").replace(/ /g, "`").slice(0, 118)); } catch (e) {}
+}
 function statusTick(t) {
   if (t - statusSentAt < 30000) return;
   statusSentAt = t;
@@ -2227,12 +2268,16 @@ function onStory(text, t) {
   let mine = -1;
   try { mine = Stat.GetProgressPercentage(); } catch (e) {}
   const same = Math.abs(mine - theirs) < 0.02;
-  if (same !== sameStory) log(`[sa-coop] story: ${same ? "the same as the host's" : `our own (${mine.toFixed(2)} %, the host ${theirs.toFixed(2)} %)`}`);
+  if (same !== sameStory) logx(`[sa-coop] story: ${same ? "the same as the host's" : `our own (${mine.toFixed(2)} %, the host ${theirs.toFixed(2)} %)`}`);
   sameStory = same;
-  try { api.coop_guest_lock(same ? 1 : 0); } catch (e) {}
-  if (!same && (!storyToldAt || t - storyToldAt > 180000)) {
+  // Always locked. It used to be locked only while the two games' progress was the same, so it unlocked itself as
+  // soon as the host passed a mission: the guest was told "you are in your own story" and could start its own
+  // missions in the middle of the host's. Only story missions are refused (shops and the rest work), so a guest
+  // with another save is not left unable to do anything.
+  try { api.coop_guest_lock(1); } catch (e) {}
+  if (!same && !storyToldAt) {
     storyToldAt = t;
-    say(`SA Co-op: you are in your own story. To play your friend's missions: ${hostSaveNote || "Esc, Load Game, the slot of the host's save"}`);
+    say(`SA Co-op: you play your friend's story. Your own missions wait. ${hostSaveNote || ""}`);
   }
 }
 
@@ -2260,7 +2305,7 @@ function gunsTick(me, t) {
       if (model > 0 && !loadModel(model)) return true; // next time
       me.giveWeapon(id, ammo);
       if (model > 0) Streaming.MarkModelAsNoLongerNeeded(model);
-      log(`[sa-coop] the mission's weapon ${id} given`);
+      logx(`[sa-coop] the mission's weapon ${id} given`);
       return false;
     });
   } catch (e) { err(`[sa-coop] guns: ${e}`); }
@@ -2294,7 +2339,7 @@ function tagTick(me, t) {
     if (World.GetPercentageTaggedInArea(tag.x - 1.5, tag.y - 1.5, tag.x + 1.5, tag.y + 1.5) >= 100) {
       tagsSent.add(key);
       sendEvent(EV_TAG, key);
-      log(`[sa-coop] tag at ${key} sprayed: told the others`);
+      logx(`[sa-coop] tag at ${key} sprayed: told the others`);
     }
   } catch (e) { err(`[sa-coop] tag: ${e}`); }
 }
@@ -2304,7 +2349,7 @@ function onTag(text) {
   try {
     World.SetTagStatusInArea(x - 2, y - 2, x + 2, y + 2, 255); // fully sprayed
     tagsSent.add(text);
-    log(`[sa-coop] a friend sprayed the tag at ${text}`);
+    logx(`[sa-coop] a friend sprayed the tag at ${text}`);
   } catch (e) { err(`[sa-coop] tag from a friend: ${e}`); }
 }
 
@@ -2388,6 +2433,7 @@ while (true) {
   keyHints(me);
   missionsTick(now);
   iconsTick(now);
+  friendLogTick(now);
   blipIconTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
   catchUpTick(me, now);

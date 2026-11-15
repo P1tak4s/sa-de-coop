@@ -178,8 +178,11 @@ static mut BASE: usize = 0;
 //   refused only where a story mission would start.
 // - The host's story markers now also count the partner standing in them, so either player can start a mission.
 const OP_CAN_START: u32 = 0x03EE;
-const SCRIPT_SPACE_LEN: usize = 269_000; // the main script and the running mission's block, as in the original game
-const SCAN: usize = 3000;
+// The main script (265 302 bytes in the game's main.scm) and the running mission's block (68 915). Checked against
+// that file: every one of the 103 story missions is started within 629 bytes after a CAN_PLAYER_START_MISSION, and
+// 15 other places (shops, odd jobs) ask the same without starting one.
+const SCRIPT_SPACE_LEN: usize = 330_000;
+const SCAN: usize = 1200;
 /// -1 = not inside CAN_PLAYER_START_MISSION, 0 = asked by a script that starts no story mission, 1 = by one that does
 static STORY_CHECK: AtomicI32 = AtomicI32::new(-1);
 static mut STORY_CACHE: [(usize, bool); 64] = [(0, false); 64];
