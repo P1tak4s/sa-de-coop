@@ -79,7 +79,9 @@ Legend:
 - [x] The mission's weapons given to the guest
 - [~] "Mission passed" with money, respect and tune for the guest (0.9.12)
 - [~] Either player counts for "be here" steps
-- [ ] Either player counts for "pick this up", "destroy this", "kill him"
+- [x] Either player's hits on mission enemies count (their damage is sent to the host)
+- [~] Either player's damage to mission cars counts: "destroy that car" (0.9.40)
+- [ ] Either player counts for "pick this up"
 - [ ] Sweet, Ryder and other story characters shown as themselves (a stand-in is shown)
 
 ### Story missions

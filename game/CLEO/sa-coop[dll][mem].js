@@ -1712,7 +1712,16 @@ function missionsTick(now) {
 function onMissionEvent(kind, text) {
   if (kind === EVM.HIT) {
     const [h, dmg] = text.split(":").map((v) => parseInt(v, 10));
-    try { if (ONMISSION && Number.isFinite(h) && Char.DoesExist(h)) { const c = new Char(h); c.setHealth(Math.max(0, c.getHealth() - dmg)); } } catch (e) {}
+    try {
+      if (!ONMISSION || !Number.isFinite(h) || !(dmg > 0)) return;
+      if (Char.DoesExist(h)) { const c = new Char(h); c.setHealth(Math.max(0, c.getHealth() - dmg)); }
+      else if (Car.DoesExist(h) && missionHandles().has(h)) {
+        // the friend hit one of our mission's cars: the same damage here, so "destroy that car" counts for both
+        // (it was sent before and ignored, 11-15). Below 250 the game sets it on fire and blows it up itself.
+        const c = new Car(h);
+        c.setHealth(Math.max(0, c.getHealth() - dmg));
+      }
+    } catch (e) {}
   } else if (kind === EVM.MONEY) {
     const earned = parseInt(text, 10);
     if (!(earned >= 0 && earned < 10000000)) return;
@@ -2504,7 +2513,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.39", EV_VERSION = 21;
+const VERSION = "0.9.40", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
