@@ -410,7 +410,24 @@ function onDrive(text) {
   const r = remotes[slot];
   if (!r || !Number.isFinite(h)) return;
   // only a car of our own running mission
-  r.missionCar = h > 0 && missionHandles().has(h) ? h : 0;
+  if (h > 0 && missionHandles().has(h)) { r.missionCar = h; r.autoMission = false; }
+  else if (!r.autoMission) r.missionCar = 0; // found by place (nearMissionCar): kept until they get out
+}
+// The friend starts to drive a car of the kind and at the place of one of our mission cars: it is that car. Their
+// EV_DRIVE comes a moment after their state (0.9.2 made a second car in between: "friend's car 492 created" right
+// before "friend drives our mission car"), and it never comes when they sit in their own game's car of that kind
+// that stood in the same place (11-15: "two cars and two bikes when the mission starts").
+function nearMissionCar(r, s) {
+  if (isGuest() || !ONMISSION) return;
+  try {
+    for (const e of ownMissionEntities()) {
+      if (e.kind !== 1 || e.dead || e.model !== s.carModel || dist2(e, s) > 8 * 8) continue;
+      const d = new Car(e.h).getDriver();
+      if (d && +d > 0 && +d !== +r.ped) continue; // somebody else drives it
+      r.missionCar = e.h; r.autoMission = true;
+      return;
+    }
+  } catch (e) { err(`[sa-coop] near mission car: ${e}`); }
 }
 function borrowedCar(r) {
   try { return r.missionCar && Car.DoesExist(r.missionCar) ? new Car(r.missionCar) : null; } catch (e) { return null; }
@@ -493,6 +510,7 @@ function glideCar(car, g, now, dtMs) {
 
 function driveRemote(r, s, now) {
   if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; }
+  if (!r.missionCar && !r.borrowed && (!r.car || r.carModel !== s.carModel)) nearMissionCar(r, s);
   const real = borrowedCar(r);
   if (real && !(r.borrowed && +r.car === +real)) {
     // into the real mission car, if its wheel is free (we may be driving it ourselves)
@@ -602,6 +620,7 @@ function releaseCar(r, s) {
   try {
     if (r.ped.isInAnyCar()) { r.ped.warpFromCarToCoord(s.x, s.y, s.z); return false; }
   } catch (e) {}
+  if (r.autoMission) { r.autoMission = false; r.missionCar = 0; }
   if (r.borrowed) { r.car = null; r.carModel = 0; r.rx = null; r.borrowed = false; r.borrowedProxy = 0; return true; }
   dropParked(r);
   try {
@@ -1101,7 +1120,11 @@ function ownMissionEntities() {
         // the "dead" byte also carries the weapon (bits 1..6) and "is shooting" (bit 7)
         let extra = 0;
         try { extra = (Math.min(46, Math.max(0, c.getCurrentWeapon())) << 1) | (c.isShooting() ? 0x80 : 0); } catch (e) {}
-        out.push({ h, kind, dead: (hp <= 0 ? 1 : 0) | extra, model: c.getModel(), x: p.x, y: p.y, z: p.z, heading: c.getHeading(), hp });
+        // kind 2, plus 4 = on our side (Grove Street or in CJ's group), plus 8 = sitting in a car
+        let k = 2;
+        try { if (c.getPedType() === 8 || c.isGroupMember(player.getGroup())) k |= 4; } catch (e) {}
+        try { if (c.isInAnyCar()) k |= 8; } catch (e) {}
+        out.push({ h, kind: k, dead: (hp <= 0 ? 1 : 0) | extra, model: c.getModel(), x: p.x, y: p.y, z: p.z, heading: c.getHeading(), hp });
       } else {
         if (!Car.DoesExist(h)) continue;
         const c = new Car(h), p = c.getCoordinates(), hp = c.getHealth();
@@ -1145,7 +1168,8 @@ function mirrorMissionEntities(now) {
   const seen = new Set();
   for (let i = 0; i < n; i++) {
     const b = entBuf + i * ENT_SIZE;
-    const h = Memory.ReadI32(b, false, false), kind = Memory.ReadU8(b + 4, false, false), deadByte = Memory.ReadU8(b + 5, false, false);
+    const h = Memory.ReadI32(b, false, false), kindRaw = Memory.ReadU8(b + 4, false, false), deadByte = Memory.ReadU8(b + 5, false, false);
+    const kind = kindRaw & 3, friendly = (kindRaw & 4) !== 0, inCar = (kindRaw & 8) !== 0;
     const dead = deadByte & 1, weapon = (deadByte >> 1) & 0x3f, shooting = (deadByte & 0x80) !== 0;
     const model = Memory.ReadU8(b + 6, false, false) | (Memory.ReadU8(b + 7, false, false) << 8);
     const x = Memory.ReadFloat(b + 8, false, false), y = Memory.ReadFloat(b + 12, false, false), z = Memory.ReadFloat(b + 16, false, false);
@@ -1157,15 +1181,20 @@ function mirrorMissionEntities(now) {
     try {
       if (!p) {
         if (dead || !(kind === 2 ? model > 0 && model < 312 : model >= 400 && model <= 611)) continue;
-        const use = kind === 2 ? model : safeCarModel(model);
+        // story characters (Sweet, Ryder: models 290..299) cannot be loaded by a script: a Grove Street member
+        // stands in for them, or the guest saw nobody at all (11-15: "he does not see Sweet")
+        const use = kind === 2 ? (model >= 290 && model <= 299 ? 106 : model) : safeCarModel(model);
         if (!loadModel(use)) continue;
-        const ent = track(kind === 2 ? Char.Create(18, use, x, y, z) : Car.Create(use, x, y, z), kind, use);
+        const ent = track(kind === 2 ? Char.Create(4, use, x, y, z) : Car.Create(use, x, y, z), kind, use);
         Streaming.MarkModelAsNoLongerNeeded(use);
         let blip = null;
         if (kind === 2) {
           blip = Blip.AddForChar(ent);
-          try { blip.changeColor(0); } catch (e) {} // red: a mission enemy or target
-          try { ent.setRelationship(4, 0); } catch (e) {} // hates player 1
+          try { if (friendly) blip.setAsFriendly(true); else blip.changeColor(0); } catch (e) {} // red: an enemy or target
+          // A puppet of the host's ped: no mind of its own. It used to be made to hate the player, and since the
+          // copies carry the originals' guns, Sweet's copy shot the guest dead (11-15: "wasted"). An enemy still
+          // shoots when its original shoots, and that is aimed where the original aims.
+          try { if (!emptyDm) emptyDm = DecisionMakerChar.Load(0); ent.setDecisionMaker(emptyDm); ent.setKeepTask(true); } catch (e) {}
         }
         p = { kind, ent, model, blip, setHp: hp };
         proxies.set(h, p);
@@ -1180,6 +1209,28 @@ function mirrorMissionEntities(now) {
       if (local < p.setHp - 3) sendEvent(EVM.HIT, `${h}:${Math.round(p.setHp - local)}`);
       if (Math.abs(local - hp) > 1) p.ent.setHealth(Math.max(1, Math.round(hp)));
       p.setHp = hp;
+      // sitting in a car in the host's game: into the car that stands there here (a copy on foot inside a moving
+      // car was shoved about, or not seen at all)
+      if (kind === 2 && inCar) {
+        if (!p.seated || !Car.DoesExist(p.seated)) {
+          p.seated = null;
+          let best = null, bestD = 4 * 4;
+          const cars = [];
+          for (const pr of proxies.values()) if (pr.kind === 1) cars.push(pr.ent);
+          for (const r of remotes) if (r && r.car) cars.push(r.car);
+          for (const car of cars) {
+            try { if (!Car.DoesExist(car)) continue; const d = dist2(car.getCoordinates(), { x, y, z }); if (d < bestD) { best = car; bestD = d; } } catch (e2) {}
+          }
+          if (best) {
+            const seat = freeSeat(best);
+            if (seat >= 0) { p.ent.warpIntoCarAsPassenger(best, seat); p.seated = best; }
+          }
+        }
+        if (p.seated) continue;
+      } else if (kind === 2 && p.seated) {
+        try { p.ent.warpFromCarToCoord(x, y, z); } catch (e2) {}
+        p.seated = null;
+      }
       const c = p.ent.getCoordinates();
       const d2 = (c.x - x) ** 2 + (c.y - y) ** 2 + (c.z - z) ** 2;
       // armed like the original, firing when it fires: in the owner's game it shoots at our copy, here at us
@@ -1667,7 +1718,14 @@ function clearLocalPopulation(me) {
   const close = (c) => { const p = c.getCoordinates(); return (p.x - mp.x) ** 2 + (p.y - mp.y) ** 2 < SHARE_NEAR * SHARE_NEAR; };
   let group = null;
   try { group = player.getGroup(); } catch (e) {}
-  const peds = [], cars = [];
+  // Copies of the host's cars. Our own game puts its own parked cars in the same places (both run the same save:
+  // the Greenwood at Sweet's, the bike by CJ's house, a mission's car), and each stood there twice.
+  const copies = [];
+  for (const p of [...worldProxies.values(), ...proxies.values()]) {
+    try { if (p.kind === 1 && Car.DoesExist(p.ent)) copies.push({ model: p.model, pos: p.ent.getCoordinates() }); } catch (e) {}
+  }
+  const onFoot = !me.isInAnyCar();
+  const peds = [], cars = [], twins = [];
   poolEach(WRVA.pedPool, WRVA.pedSize, (h, p) => {
     const model = Memory.ReadI16(p + WRVA.model, false, false);
     if (skip.has(h) || model < 7 || model > 288 || lawPed(model) || tracked(h)) return;
@@ -1686,12 +1744,20 @@ function clearLocalPopulation(me) {
       const car = new Car(h);
       if (!close(car)) return;
       const d = car.getDriver();
-      if (!d || +d <= 0 || !Char.DoesExist(+d) || skip.has(+d) || tracked(+d)) return; // nobody at the wheel: not traffic
+      if (!d || +d <= 0 || !Char.DoesExist(+d)) {
+        // nobody at the wheel: not traffic. It goes only when the host's same car stands in its place (and we are
+        // not right at it on foot, perhaps getting in)
+        const cp = car.getCoordinates();
+        if (copies.some((c) => c.model === model && dist2(c.pos, cp) < 6 * 6) && !(onFoot && dist2(mp, cp) < 4 * 4)) twins.push(car);
+        return;
+      }
+      if (skip.has(+d) || tracked(+d)) return;
       cars.push({ car, d });
     } catch (e) {}
   });
   for (const c of peds) { try { c.delete(); } catch (e) {} }
   for (const { car, d } of cars) { try { d.delete(); car.delete(); } catch (e) {} }
+  for (const car of twins) { try { log(`[sa-coop] world: our own parked car ${car.getModel()} removed, the host's stands there`); car.delete(); } catch (e) {} }
   return peds.length + cars.length;
 }
 function guestModeTick(me, t) {
@@ -1857,7 +1923,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.3", EV_VERSION = 21;
+const VERSION = "0.9.4", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
