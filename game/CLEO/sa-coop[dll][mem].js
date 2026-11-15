@@ -1663,7 +1663,28 @@ function ownedHandles(me) {
 }
 // something another script of the mod made and keeps (the AI partner, a kept car)
 function tracked(h) { try { return api.coop_tracked(h) === 1; } catch (e) { return false; } }
-function outside() { try { return Streaming.GetAreaVisible() === 0; } catch (e) { return true; } }
+// Indoors only when both the game's shown area and the player's own say so. The shown area alone was left at a
+// building's number after a friend's cutscene there (11-15, the guest's status: "area=1" for eight minutes while it
+// drove in the street): the guest then counted as indoors, shared nothing with the host and kept a world of its
+// own, with its own cars next to the host's ("the cars are still doubled for him").
+function outside() {
+  try { if (Streaming.GetAreaVisible() === 0) return true; } catch (e) { return true; }
+  try { return player.getChar().getAreaVisible() === 0; } catch (e) { return false; }
+}
+// ...and the shown area is put right when it stays wrong for 3 s (not during a cutscene, which sets it on purpose)
+let areaOddSince = 0;
+function areaTick(me, t) {
+  try {
+    const shown = Streaming.GetAreaVisible(), own = me.getAreaVisible();
+    // only a guest (a host's mission shows rooms on purpose), and never while any cutscene runs
+    if (shown === own || playingCut || !isGuest() || Memory.ReadU8(RVA.cutRunning, false, true) === 1) { areaOddSince = 0; return; }
+    if (!areaOddSince) { areaOddSince = t; return; }
+    if (t - areaOddSince < 3000) return;
+    areaOddSince = 0;
+    err(`[sa-coop] shown area ${shown} but the player is in ${own}: put right`);
+    Streaming.SetAreaVisible(own);
+  } catch (e) {}
+}
 
 // ---- sending: the host everything ordinary around its guests, a guest only the police after it
 function sendWorldTick(me, t, guest) {
@@ -1984,7 +2005,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.10", EV_VERSION = 21;
+const VERSION = "0.9.11", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2035,7 +2056,7 @@ function statusTick(t) {
   statusSentAt = t;
   try {
     const st = `S:v${VERSION}` + (isGuest() ? ` guest shared=${sharedMode ? 1 : 0}` : " host") + ` copies=${worldProxies.size} mission=${proxies.size}` +
-      ` area=${Streaming.GetAreaVisible()}` + (cutOff ? " cutscenes-off" : "");
+      ` area=${Streaming.GetAreaVisible()}/${player.getChar().getAreaVisible()}` + (cutOff ? " cutscenes-off" : "");
     sendEvent(EV_LOG, st.replace(/ /g, "`"));
   } catch (e) {}
 }
@@ -2192,6 +2213,7 @@ while (true) {
 
   const me = player.getChar();
   handleOwnHealth(me, now);
+  areaTick(me, now);
   writeMine(me);
   syncRemotes(me, api.coop_slot(), now);
   settingsTick(now);
