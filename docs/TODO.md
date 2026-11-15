@@ -77,6 +77,7 @@ Legend:
 - [~] Skipping a cutscene needs both players (0.9.21, 0.9.30)
 - [~] A mission's own scenes: camera, fades and widescreen replayed in the guest's game (0.9.28, 0.9.33)
 - [x] Mission enemies and allies copied to the guest, armed
+- [~] Mission enemies attack both players: half of the attack orders of all 151 missions go to the friend while near (0.9.47)
 - [~] Mission enemies take 30 % more per extra player, as in CoopAndreas' missions (0.9.45)
 - [x] The mission's weapons given to the guest
 - [~] "Mission passed" with money, respect and tune for the guest (0.9.12)

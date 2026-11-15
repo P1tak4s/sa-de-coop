@@ -309,6 +309,15 @@ unsafe extern "C" fn will_kill(calc: *mut u8, ped: *mut u8, resp: *mut u8, speak
     }
 }
 
+// ---- enemies fight both players (11-15) ----------------------------------------------------------------------------
+// Read out of all 151 missions of the Definitive Edition's main script: enemies are told to attack the player's
+// character ($PLAYER_ACTOR) about 700 times (TASK_KILL_CHAR_ON_FOOT alone 597), never anyone else, so in co-op they
+// all went for the host and left the friend alone. Every second such order, while the friend is near, is given again
+// with $PLAYER_ACTOR set to the friend's copy: that enemy fights the friend (its copy in the friend's game fires at
+// the friend). An order given TO the player ($PLAYER_ACTOR as the first parameter, a scene) is left alone.
+const ATTACKS: &[u32] = &[0x05E2, 0x0634, 0x0635, 0x0637, 0x074D, 0x07A5];
+static ATTACK_TURN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 type Handler = unsafe extern "C" fn(*mut u8, u32) -> u8;
 type CanStart = unsafe extern "C" fn(*mut u8) -> u8;
 static mut ORIG: [usize; 27] = [0; 27];
@@ -412,8 +421,31 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
             crate::send_raw_event(ev);
         }
     }
-    // ask again for the partner: host only, mission scripts only, plain (not NOT-ed) checks that said no
     let partner = PARTNER_PED.load(Ordering::Relaxed);
+    if ATTACKS.contains(&op)
+        && *s.add(S_MISSION) != 0
+        && partner > 0
+        && PARTNER_NEAR.load(Ordering::Relaxed)
+        && connected()
+        && crate::is_host()
+        && ped_exists(partner)
+    {
+        // the first parameter is not the player itself (global variable type 2 at offset 12 = $PLAYER_ACTOR)
+        let first = std::slice::from_raw_parts(ip as *const u8, 3);
+        let to_player = first == [2, 12, 0];
+        if !to_player && ATTACK_TURN.fetch_add(1, Ordering::Relaxed) % 2 == 1 {
+            let actor = (BASE + PLAYER_ACTOR) as *mut i32;
+            let end_ip = *(s.add(S_IP) as *const usize);
+            let saved = *actor;
+            *(s.add(S_IP) as *mut usize) = ip;
+            *actor = partner;
+            f(s, op);
+            *actor = saved;
+            *(s.add(S_IP) as *mut usize) = end_ip;
+        }
+        return r;
+    }
+    // ask again for the partner: host only, mission scripts only, plain (not NOT-ed) checks that said no
     if partner > 0
         && ped_exists(partner)
         && not == 0
