@@ -939,9 +939,9 @@ try { cutOff = flag(0, "cutscene") === 1; if (cutOff) log("[sa-coop] cutscenes: 
 // (11-15). The table is named after the mission script. Behind the same kind of marker as the cutscenes.
 let textTable = "", textOff = false;
 try { textOff = flag(0, "missiontext") === 1; if (textOff) log("[sa-coop] mission text: the game died loading one last time, off"); } catch (e) {}
-function loadFriendText(mission) {
+function loadFriendText(mission, again) {
   const table = String(mission || "").toUpperCase();
-  if (textOff || table === textTable || !/^[A-Z0-9_]{2,7}$/.test(table) || table === "NONAME") return;
+  if (textOff || (table === textTable && !again) || !/^[A-Z0-9_]{2,7}$/.test(table) || table === "NONAME") return;
   textTable = table;
   try {
     flag(1, "missiontext");
@@ -982,7 +982,13 @@ function playCutscene(text, me) {
       changed = true;
     }
     try { Text.ClearHelp(); } catch (e) {}
-    loadFriendText(friendMission); // its subtitles
+    // Its subtitles. Loaded again for every cutscene (the game may have dropped the table since), and when the
+    // mission's name is not known (a closing cutscene comes after "mission ended") from the last mission, or from
+    // the cutscene's own name: sweet3b -> SWEET3. 11-15: "SWE3B01 ... 07 missing" on the guest's screen.
+    const known = friendMission && friendMission !== "noname" ? friendMission : lastFriendMission;
+    const table = known || name.replace(/[a-z]$/i, "");
+    loadFriendText(table, true);
+    err(`[sa-coop] cutscene ${name}: text table ${table} (mission ${friendMission || "-"}, last ${lastFriendMission || "-"}, loaded ${textTable || "-"}, off ${textOff ? 1 : 0})`);
     Cutscene.Load(name);
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) pause(25);
     if (Cutscene.HasLoaded()) {
@@ -1132,7 +1138,7 @@ function hearWorld(me) {
     else if (kind === EV_GUNS) onGuns(text);
     else if (kind === EV_TAG) onTag(text);
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
-    else if (kind === EV.MISSION && (friendMission = text, true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
+    else if (kind === EV.MISSION && (friendMission = text, text && text !== "noname" && (lastFriendMission = text), true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
   }
 }
 
@@ -1372,7 +1378,7 @@ function onFriendlyHit(me, text) {
 // ---- catching up: J jumps to your friend (into a free seat, onto the trunk, or next to them) -------------------
 // A mission runs in one game; the other player left far behind is no help and can strand the story. During a
 // mission, more than 200 m away for 8 s, a banner offers J. J works any time.
-let friendMission = "", farSince = 0;
+let friendMission = "", lastFriendMission = "", farSince = 0;
 const KEY_J = 74, FAR = 60; // further than this during a mission: the jump (J) is offered
 try { FxtStore.insert("COOPFAR", "Your friend is on a mission. Press J to join them"); } catch (e) {}
 
@@ -1978,7 +1984,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.9", EV_VERSION = 21;
+const VERSION = "0.9.10", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
