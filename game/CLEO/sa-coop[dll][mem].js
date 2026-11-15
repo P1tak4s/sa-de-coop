@@ -2024,10 +2024,12 @@ function setPopulation(on) {
   try { World.SetPedDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { err(`[sa-coop] ped density: ${e}`); }
   try { World.SetCarDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { err(`[sa-coop] car density: ${e}`); }
 }
-function dropWorldProxy(h) {
+function dropWorldProxy(h, why) {
   const p = worldProxies.get(h);
   worldProxies.delete(h);
   if (!p) return;
+  // close to us: say why it went (11-15: "when he hits something, people and cars disappear")
+  try { if (why && dist2(p.ent.getCoordinates(), player.getChar().getCoordinates()) < 25 * 25) logx(`[sa-coop] world copy ${p.kind === 1 ? "car" : "ped"} ${p.model} removed near us: ${why}`); } catch (e) {}
   try { if (p.driver && Char.DoesExist(p.driver)) { untrack(p.driver); p.driver.delete(); } } catch (e) {}
   try {
     if (p.kind === 2 && Char.DoesExist(p.ent)) { untrack(p.ent); p.ent.delete(); }
@@ -2128,7 +2130,7 @@ function receiveWorldTick(me, t, guest) {
   for (const p of worldProxies.values()) if (p.seen > newest) newest = p.seen;
   const paused = t - newest > 1500 && t - newest < 180000 && remotes.some((r) => r && (r.area || 0) === 0);
   for (const [h, p] of worldProxies) {
-    if (t - p.seen > 1500 && !(paused && newest - p.seen < 1500)) { dropWorldProxy(h); continue; }
+    if (t - p.seen > 1500 && !(paused && newest - p.seen < 1500)) { dropWorldProxy(h, `not sent by the host for ${t - p.seen} ms, hp ${Math.round(p.hp)}`); continue; }
     // we drove off in a copy: it is ours now, its owner removes the original
     if (p.kind === 1 && me.isInAnyCar()) {
       try {
@@ -2265,7 +2267,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.25", EV_VERSION = 21;
+const VERSION = "0.9.26", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
