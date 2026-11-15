@@ -275,7 +275,8 @@ function writeMine(me) {
     if (ownerSlot >= 0 && !(driver && +driver === +me)) {
       // riding with a friend: they send the car; we send which seat we are in, so their copy of us takes the same
       let seat = 0;
-      try { for (let i = 0; i < 3; i++) if (+car.getCharInPassengerSeat(i) === +me) { seat = i; break; } } catch (e) {}
+      // only the seats this car has (a two-seater has one: asking about seat 2 read past them, see rideRemote)
+      try { const n = Math.min(3, car.getMaximumNumberOfPassengers()); for (let i = 0; i < n; i++) if (+car.getCharInPassengerSeat(i) === +me) { seat = i; break; } } catch (e) {}
       inCar = 2; carModel = ownerSlot; carHealth = seat;
     } else {
       q = car.getQuaternion();
@@ -658,7 +659,12 @@ function rideRemote(r, s, mySlot, me) {
   try {
     // their seat here may hold someone else (Sweet in a mission): then they ride outside, nobody is pulled out
     let seat = s.carHealth;
-    let free = seat !== SEAT_OUTSIDE && seat >= 0 && car.isPassengerSeatFree(seat);
+    // A seat this car has: the friend's seat number comes from their copy of it, which can have more doors. Asked
+    // about a seat a two-seater does not have, the game read past its seats and died (11-15: "a two-seat car, a
+    // third person gets in, crash").
+    let max = 0;
+    try { max = car.getMaximumNumberOfPassengers(); } catch (e) {}
+    let free = seat !== SEAT_OUTSIDE && seat >= 0 && seat < max && car.isPassengerSeatFree(seat);
     // their seat is taken or is not there in this car (their copy of it can have more doors than the real one):
     // any other free seat before the trunk (11-15: a friend sat through the roof of a car with empty seats)
     if (!free && seat !== SEAT_OUTSIDE) { const other = freeSeat(car); if (other >= 0) { seat = other; free = true; } }
@@ -2379,7 +2385,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.34", EV_VERSION = 21;
+const VERSION = "0.9.35", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
