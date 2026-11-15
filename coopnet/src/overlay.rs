@@ -534,9 +534,10 @@ unsafe extern "system" fn detour(this: *mut u8, func: *mut u8, parms: *mut u8) {
                 // UI_Button_Menu_SA_C (co-op = 7); the owning menu is not reachable through the outer chain
                 let pause_btn = cls == "UI_Button_Menu_SA_C";
                 let hit = (menu.contains("MainMenu") || (menu.is_empty() && main_btn)) && value == 4
-                    // 11-15: in the pause menu co-op answers with 8 (the entry MenuPatch adds goes to the end of the
-                    // list, after exit = 7, though it is shown before it); 7 was a wrong reading and never fired
-                    || (menu.contains("PauseMenu") || (menu.is_empty() && pause_btn)) && value == 8;
+                    // MenuPatch inserts co-op at exit's place, so in the pause menu co-op = 7 and exit = 8. For a
+                    // few versions this said 8, and "Exit game" opened the co-op window (11-15). The entry itself
+                    // also calls CustomFunctionFromString("COOP") above.
+                    || (menu.contains("PauseMenu") || (menu.is_empty() && pause_btn)) && value == 7;
                 crate::log_line(&format!("click on {cls} value={value} menu={menu} coop={hit}"));
                 if hit {
                     OPEN.store(true, Ordering::SeqCst);
