@@ -67,6 +67,7 @@ function untrack(ent) { try { api.coop_untrack(+ent); } catch (e) {} }
   if (n) logx(`[sa-coop] removed ${n} leftovers of the previous run`);
 }
 const SKINS = [105, 106, 107, 105]; // Grove Street looks until we sync clothes
+const LOOK_MODELS = [0, 106, 107, 102, 108, 114, 117, 121, 247, 280, 274, 277, 287, 113];
 const DOWN_AT = 40;                 // health below this: down instead of dead (one AK hit would skip a lower mark)
 // ---- session settings: the host picks them in the co-op menu, the script sends them to the others every 3 s ----
 const EVS_SET = 8, EV_PHIT = 9;
@@ -396,7 +397,8 @@ const STORY_LOOKS = ["", "sweet", "ryder", "smoke", "cesar", "kendl", "wuzimu", 
 function lookModel(slot, look) {
   // story characters (Sweet, Ryder...) need LOAD_SPECIAL_CHARACTER, which crashes the Definitive Edition when a
   // script calls it: everyone gets a Grove Street look until that can be done on the game's own thread
-  const m = SKINS[slot];
+  // the look the friend chose (F9, Look; same order as SKIN_NAMES in coopnet64.asi); 0 = their slot's Grove look
+  const m = look > 0 && look < LOOK_MODELS.length ? LOOK_MODELS[look] : SKINS[slot];
   return loadModel(m) ? m : 0;
 }
 
@@ -2206,7 +2208,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.18", EV_VERSION = 21;
+const VERSION = "0.9.19", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;

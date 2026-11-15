@@ -14,7 +14,10 @@ pub static REVIVE_SECS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU
 pub static SKIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 /// The last message about save sets, shown in the status row.
 pub static SAVE_NOTE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-pub const SKIN_NAMES: [&str; 8] = ["Grove Street member", "Sweet", "Ryder", "Big Smoke", "Cesar", "Kendl", "Woozie", "The Truth"];
+/// How friends see you (F9, Look). Ordinary characters only: the story characters (Sweet, Ryder...) cannot be loaded by
+/// a script in the Definitive Edition. Same order as LOOK_MODELS in the script.
+pub const SKIN_NAMES: [&str; 14] = ["Grove Street", "Grove Street 2", "Grove Street 3", "Ballas", "Vagos", "Aztecas",
+    "Triads", "Da Nang Boys", "Biker", "Police", "Medic", "Firefighter", "Army", "Mafia"];
 
 pub fn toggle() {
     let was = OPEN.fetch_xor(true, Ordering::SeqCst);
