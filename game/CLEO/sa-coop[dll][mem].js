@@ -1625,7 +1625,14 @@ function jumpToFriend(me) {
     if (r.car && Car.DoesExist(r.car)) {
       const seat = isBike(r.car) ? (freeSeat(r.car) === 0 ? 0 : -1) : freeSeat(r.car);
       if (seat >= 0) me.warpIntoCarAsPassenger(r.car, seat);
-      else { attachOutside(me, r.car); ridingOutside = { car: r.car, slot: f.slot }; }
+      else {
+        // No free seat: next to the car, on foot. Hung on its outside the game's camera stayed behind and the
+        // player was stuck ("F - get out" over an empty street, 11-15 18:11)
+        const c = r.car.getCoordinates(), hd = r.car.getHeading() * Math.PI / 180;
+        Streaming.RequestCollision(c.x, c.y);
+        me.setCoordinates(c.x + Math.cos(hd) * 3, c.y + Math.sin(hd) * 3, c.z + 0.5);
+        say("SA Co-op: no free seat in your friend's car: you are next to it");
+      }
     } else {
       const c = r.ped.getCoordinates();
       Streaming.RequestCollision(c.x, c.y); // no LOAD_SCENE: it crashes the Definitive Edition from a script
@@ -2326,7 +2333,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.28", EV_VERSION = 21;
+const VERSION = "0.9.29", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2556,6 +2563,8 @@ while (true) {
   const me = player.getChar();
   handleOwnHealth(me, now);
   areaTick(me, now);
+  // riding on a car's outside (G) but no longer at it: off, or the camera stays behind and nothing moves
+  if (ridingOutside) { try { if (!Car.DoesExist(ridingOutside.car) || dist2(me.getCoordinates(), ridingOutside.car.getCoordinates()) > 8 * 8) getOffOutside(me); } catch (e) {} }
   writeMine(me);
   syncRemotes(me, api.coop_slot(), now);
   settingsTick(now);
