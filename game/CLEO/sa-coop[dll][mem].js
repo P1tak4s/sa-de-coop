@@ -28,7 +28,7 @@ function areaOf(ch) {
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -1044,6 +1044,7 @@ function playCutscene(text, me) {
           if (!cleared && Date.now() - from > 3000) { cleared = true; try { flag(2, "cutscene"); } catch (e) {} }
           if (Date.now() - polledAt > 150) {
             polledAt = Date.now();
+            skipTick();
             const sig = pollCut();
             if (sig.ended) theirsEnded = true;
             if (sig.skip || sig.next) { cut = true; break; } // skipped there, or the next one began: ours ends now
@@ -1186,10 +1187,43 @@ function pollCut() {
   while ((kind = api.coop_event_poll(evBuf)) > 0) {
     const text = readStr(evBuf, 127, false);
     if (kind === EV_CUTEND) { out.ended = true; if (text === "1") out.skip = true; if (shieldUntil) shieldUntil = Date.now() + 2000; }
+    else if (kind === EV_SKIPREQ) onSkipRequest();
     else { if (kind === EV.CUTSCENE) out.next = true; if (deferred.length < 600) deferred.push({ kind, text }); }
   }
   return out;
 }
+// ---- skipping a cutscene together: each press is told to the friend; with both pressed (within 20 s) both games
+// skip. A press when the friend's game shows no cutscene at all (it could not play it) skips at once.
+const EV_SKIPREQ = 31;
+let skipMineAt = 0, skipTheirsAt = 0, skipSaidAt = 0, skipAllowedAt = 0, skipAnsweredAt = 0;
+function cutsceneShown() { return playingCut || Memory.ReadU8(RVA.cutRunning, false, true) === 1; }
+function skipTick() {
+  let pressed = 0;
+  try { pressed = api.coop_skip_take(); } catch (e) { return; }
+  const t = Date.now();
+  if (!cutsceneShown()) { if (skipAllowedAt && t - skipAllowedAt > 1500) { skipAllowedAt = 0; try { api.coop_skip_allow(0); } catch (e) {} } return; }
+  if (pressed) {
+    skipMineAt = t;
+    sendEvent(EV_SKIPREQ, "1");
+    if (t - skipTheirsAt < 20000) { skipAgreed(); return; }
+    if (t - skipSaidAt > 3000) { skipSaidAt = t; say("SA Co-op: skip asked. It skips when your friend presses skip too"); }
+  }
+}
+function onSkipRequest() {
+  const t = Date.now();
+  skipTheirsAt = t;
+  if (t - skipMineAt < 20000) { skipAgreed(); return; }
+  if (cutsceneShown()) say("SA Co-op: your friend wants to skip the cutscene. Press skip to agree");
+  // nothing shown here (it could not be played): our "yes" at once; once, so two games without one do not echo
+  else if (t - skipAnsweredAt > 10000) { skipAnsweredAt = t; sendEvent(EV_SKIPREQ, "1"); }
+}
+function skipAgreed() {
+  skipMineAt = 0; skipTheirsAt = 0;
+  skipAllowedAt = Date.now();
+  try { api.coop_skip_allow(1); } catch (e) {}
+  logx("[sa-coop] cutscene skipped by both");
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -1232,6 +1266,7 @@ function hearWorld(me) {
     else if (kind === EV_ICONS) onIcons(text);
     else if (kind === EV_CUTEND) { if (shieldUntil) shieldUntil = Date.now() + 2000; }
     else if (kind === EV_SAY) say(text.replace(/`/g, " "));
+    else if (kind === EV_SKIPREQ) onSkipRequest();
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION) onFriendMission(text, me);
@@ -2215,7 +2250,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.20", EV_VERSION = 21;
+const VERSION = "0.9.21", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2464,6 +2499,7 @@ while (true) {
   keyHints(me);
   missionsTick(now);
   iconsTick(now);
+  skipTick();
   friendLogTick(now);
   blipIconTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);

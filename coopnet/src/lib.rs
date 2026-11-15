@@ -530,6 +530,21 @@ pub extern "C" fn coop_native_done() -> i64 {
     scripthook::NATIVE_DONE.load(std::sync::atomic::Ordering::Relaxed) as i64
 }
 
+/// 1 when the player pressed the cutscene skip button since the last call (with a friend connected the game did not
+/// skip: see scripthook). Read once.
+#[no_mangle]
+pub extern "C" fn coop_skip_take() -> i64 {
+    scripthook::SKIP_PRESSED.swap(false, std::sync::atomic::Ordering::Relaxed) as i64
+}
+
+/// 1 = both players want to skip: the game skips the running cutscene on its next frame. 0 = take that back (no
+/// cutscene is running any more: an unused "yes" must not skip the next one).
+#[no_mangle]
+pub extern "C" fn coop_skip_allow(on: i64) -> i64 {
+    scripthook::SKIP_OK.store(on != 0, std::sync::atomic::Ordering::Relaxed);
+    1
+}
+
 /// Why the game was just told "no mission now" (0 = it was not): 1 guest, 2 the host's partner is not near. Read once.
 #[no_mangle]
 pub extern "C" fn coop_take_refused() -> i64 {

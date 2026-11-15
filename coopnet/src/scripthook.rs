@@ -56,6 +56,35 @@ pub static GUEST_LOCK: AtomicBool = AtomicBool::new(false);
 pub static REFUSED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
+// ---- a cutscene is skipped only when both players want it (11-15) -------------------------------------------------
+// 0xFF9EC0 is the game's "is the skip button being pressed" (no parameters, bool). CCutsceneMgr::Update calls it
+// every frame and skips (0xFF96C0) on true; two script commands call it too (a mission's own skippable scenes).
+// Found in the exe: WAS_CUTSCENE_SKIPPED reads 0x572A439, which only 0xFF96C0 sets, and its button caller is 0xFF951A.
+// With a friend connected a press is only noted (SKIP_PRESSED, read by the script) and false is returned, until the
+// script says both have pressed (SKIP_OK): then true is returned once and the game skips as it always does.
+const SKIP_BUTTON: usize = 0xFF9EC0;
+type SkipButton = unsafe extern "C" fn() -> u8;
+static mut ORIG_SKIP: Option<SkipButton> = None;
+pub static SKIP_PRESSED: AtomicBool = AtomicBool::new(false);
+pub static SKIP_OK: AtomicBool = AtomicBool::new(false);
+static SKIP_WAS_DOWN: AtomicBool = AtomicBool::new(false);
+unsafe extern "C" fn skip_button() -> u8 {
+    let r = match ORIG_SKIP { Some(f) => f(), None => 0 };
+    if !connected() || crate::coop_friends() == 0 {
+        SKIP_OK.store(false, Ordering::Relaxed);
+        return r;
+    }
+    if SKIP_OK.swap(false, Ordering::Relaxed) {
+        return 1;
+    }
+    // a press is a new press: held down it is noted once
+    let was = SKIP_WAS_DOWN.swap(r != 0, Ordering::Relaxed);
+    if r != 0 && !was {
+        SKIP_PRESSED.store(true, Ordering::Relaxed);
+    }
+    0
+}
+
 /// The hooks are in: this is the build of the game our addresses are for.
 pub fn installed() -> bool {
     INSTALLED.load(Ordering::Relaxed)
@@ -354,5 +383,16 @@ pub unsafe fn install() {
         crate::log_line(&format!("story hooks: opcode table wrapped, mission start {e:?}"));
     } else {
         crate::log_line(&format!("story hooks: mission start hook failed {st:?}"));
+    }
+    let sb = (BASE + SKIP_BUTTON) as *const u8;
+    if std::slice::from_raw_parts(sb, 6) == [0x40, 0x53, 0x48, 0x83, 0xEC, 0x20] {
+        let mut o: *mut std::ffi::c_void = std::ptr::null_mut();
+        if matches!(MH_CreateHook(sb as *mut _, skip_button as *mut _, &mut o), MH_STATUS::MH_OK) {
+            ORIG_SKIP = Some(std::mem::transmute::<*mut std::ffi::c_void, SkipButton>(o));
+            let e = MH_EnableHook(sb as *mut _);
+            crate::log_line(&format!("story hooks: cutscene skip held for both players {e:?}"));
+        }
+    } else {
+        crate::log_line("story hooks: cutscene skip: unknown bytes, off");
     }
 }
