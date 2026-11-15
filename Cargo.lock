@@ -1968,7 +1968,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "sa-coop"
-version = "0.8.18"
+version = "0.8.19"
 dependencies = [
  "eframe",
  "embed-resource",

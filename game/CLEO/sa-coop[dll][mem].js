@@ -877,17 +877,18 @@ function onStats(text) {
 try {
   FxtStore.insert("COOPHG", "G - get in your friend's car");
   FxtStore.insert("COOPHF", "F - get out");
-  FxtStore.insert("COOPHI", "Your friend is inside: walk to the door or press J");
-  FxtStore.insert("COOPHO", "J - go to your friend");
+  FxtStore.insert("COOPHI", "Your friend is inside: use the door (J if it is shut)");
+  FxtStore.insert("COOPHO", "J - go out to your friend");
 } catch (e) {}
 // ---- through doors together -----------------------------------------------------------------------------------
 // A house, a shop or a barber opens for the player whose story unlocked it; in the friend's game the same door can
 // be shut (11-15: "he cannot go into houses, the barber and so on"). So doors are followed, not opened: a friend
 // who went inside leaves a mark where they stood outside; standing there takes you in beside them, and J takes you
 // to them from anywhere (in or out).
-let followAt = 0, unfreezeAt = 0, doorHint = "";
+let followAt = 0, unfreezeAt = 0, doorHint = "", doorSince = 0;
 function followTick(me, now) {
   doorHint = "";
+  let atDoor = false;
   if (unfreezeAt && now > unfreezeAt) { unfreezeAt = 0; try { me.freezePosition(false); } catch (e) {} }
   if (downed) return;
   try {
@@ -898,11 +899,20 @@ function followTick(me, now) {
       if (theirs === mine) continue;
       if (mine === 0 && theirs !== 0 && r.door) {
         const d = dist2(p, r.door);
-        if (d < 3 * 3 && !me.isInAnyCar() && now - followAt > 3000) { followAt = now; jumpToFriend(me); return; }
+        // The game's own door first: walking in the normal way starts the place's own life (the people behind
+        // the counter, the buying, the way out). Carried in by us, a Burger Shot was empty, sold nothing and had no
+        // exit (11-15). Only when we have stood at the door for 3 s and the game has not taken us in (a door that
+        // is shut in our game) are we taken to the friend.
+        if (d < 3 * 3 && !me.isInAnyCar()) {
+          if (!doorSince) doorSince = now;
+          if (now - doorSince > 3000 && now - followAt > 3000) { followAt = now; doorSince = 0; jumpToFriend(me); return; }
+          atDoor = true;
+        }
         if (d < 40 * 40) doorHint = "COOPHI";
       } else if (mine !== 0) doorHint = "COOPHO"; // we are inside, they are not (or in another building)
     }
   } catch (e) {}
+  if (!atDoor) doorSince = 0;
 }
 
 function keyHints(me) {
@@ -1723,7 +1733,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.18", EV_VERSION = 21;
+const VERSION = "0.8.19", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
