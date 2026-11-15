@@ -27,8 +27,8 @@ Legend:
 - [~] Friend's map icon: CJ head on foot, car while driving (0.9.13)
 - [x] Walking, running, shooting shown
 - [x] Down instead of dead, revive by holding E
-- [ ] Down instead of dead after one big hit (explosion, fall): the game kills at once
-- [ ] Mission failed only when both are down
+- [~] Down instead of dead after one big hit too: the game's own "will this kill" check is hooked (0.9.42)
+- [~] Mission failed only when both are down (0.9.42: a downed player is not dead)
 - [x] Riding as a passenger in a friend's car
 - [~] No crash when a third person gets into a two-seat car (0.9.35)
 - [~] J: jump to your friend; never hangs you on a car's outside (0.9.29)

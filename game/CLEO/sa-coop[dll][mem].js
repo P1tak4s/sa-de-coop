@@ -28,7 +28,7 @@ function areaOf(ch) {
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow", "coop_crash_line", "coop_replayed"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow", "coop_crash_line", "coop_replayed", "coop_down_not_dead"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -391,7 +391,14 @@ let carWas = false, exitProofUntil = 0, diedSaid = false;
 // stand around the player who cannot move or see them.
 let shieldUntil = 0;
 function shield(me, ms) { shieldUntil = Date.now() + ms; try { me.setProofs(true, true, true, true, true); } catch (e) {} }
+// coopnet64.asi keeps a killing hit from killing us while a friend can still revive us (both down: the game's death)
+let downNotDeadWas = -1;
+function downNotDeadTick() {
+  const on = anyFriend() && !remotes.some((r) => r && r.down) ? 1 : 0;
+  if (on !== downNotDeadWas) { downNotDeadWas = on; try { api.coop_down_not_dead(on); } catch (e) {} }
+}
 function handleOwnHealth(me, now) {
+  downNotDeadTick();
   if (shieldUntil && !downed) {
     if (now < shieldUntil) return;
     shieldUntil = 0;
@@ -2559,7 +2566,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.41", EV_VERSION = 21;
+const VERSION = "0.9.42", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;

@@ -281,6 +281,34 @@ unsafe fn run_replay() {
     REPLAYED.fetch_add(1, Ordering::Relaxed);
 }
 
+// ---- down, not dead (11-15) -------------------------------------------------------------------------------------
+// 0x119B510 is CPedDamageResponseCalculator::ComputeWillKillPed(this, ped, response, speak): `this` holds the damage
+// (+8, f32) and the weapon (+0x10); it takes the damage from the ped's health (+0x76C) and kills the ped when less
+// than 1.0 would be left. Our player is CWorld::Players[0].m_pPed (*0x53EB720, as the function itself compares).
+// While the script allows it (a friend is connected and not down), a hit that would kill our player leaves it 2
+// health instead: the script then puts it down, to be revived. With both down the game kills as always.
+const WILL_KILL: usize = 0x119B510;
+const PLAYER0_PED: usize = 0x53EB720;
+const PED_HEALTH: usize = 0x76C;
+type WillKill = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, u8);
+static mut ORIG_WILL_KILL: Option<WillKill> = None;
+pub static DOWN_NOT_DEAD: AtomicBool = AtomicBool::new(false);
+unsafe extern "C" fn will_kill(calc: *mut u8, ped: *mut u8, resp: *mut u8, speak: u8) {
+    if DOWN_NOT_DEAD.load(Ordering::Relaxed) && connected() && !ped.is_null() && !calc.is_null() {
+        let me = *((BASE + PLAYER0_PED) as *const *mut u8);
+        if ped == me {
+            let health = *(ped.add(PED_HEALTH) as *const f32);
+            let dmg = calc.add(8) as *mut f32;
+            if health.is_finite() && (*dmg).is_finite() && health - *dmg < 2.0 && health > 2.0 {
+                *dmg = health - 2.0;
+            }
+        }
+    }
+    if let Some(f) = ORIG_WILL_KILL {
+        f(calc, ped, resp, speak);
+    }
+}
+
 type Handler = unsafe extern "C" fn(*mut u8, u32) -> u8;
 type CanStart = unsafe extern "C" fn(*mut u8) -> u8;
 static mut ORIG: [usize; 27] = [0; 27];
@@ -483,6 +511,17 @@ pub unsafe fn install() {
         crate::log_line(&format!("story hooks: opcode table wrapped, mission start {e:?}"));
     } else {
         crate::log_line(&format!("story hooks: mission start hook failed {st:?}"));
+    }
+    let wk = (BASE + WILL_KILL) as *const u8;
+    if std::slice::from_raw_parts(wk, 6) == [0x48, 0x89, 0x5C, 0x24, 0x08, 0x48] {
+        let mut o: *mut std::ffi::c_void = std::ptr::null_mut();
+        if matches!(MH_CreateHook(wk as *mut _, will_kill as *mut _, &mut o), MH_STATUS::MH_OK) {
+            ORIG_WILL_KILL = Some(std::mem::transmute::<*mut std::ffi::c_void, WillKill>(o));
+            let e = MH_EnableHook(wk as *mut _);
+            crate::log_line(&format!("story hooks: down instead of dead {e:?}"));
+        }
+    } else {
+        crate::log_line("story hooks: down instead of dead: unknown bytes, off");
     }
     let sb = (BASE + SKIP_BUTTON) as *const u8;
     if std::slice::from_raw_parts(sb, 6) == [0x40, 0x53, 0x48, 0x83, 0xEC, 0x20] {

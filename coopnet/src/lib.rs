@@ -339,6 +339,14 @@ pub fn send_raw_event(ev: Vec<u8>) {
     }
 }
 
+/// 1 = a hit that would kill our player leaves it 2 health (it goes down instead); the script sets it while a friend
+/// is connected and not down.
+#[no_mangle]
+pub extern "C" fn coop_down_not_dead(on: i64) -> i64 {
+    scripthook::DOWN_NOT_DEAD.store(on != 0, std::sync::atomic::Ordering::Relaxed);
+    1
+}
+
 /// How many of the host's scene commands this game has run (the script leaves the camera to them meanwhile).
 #[no_mangle]
 pub extern "C" fn coop_replayed() -> i64 {
