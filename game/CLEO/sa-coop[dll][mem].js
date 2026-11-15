@@ -151,6 +151,23 @@ function readCode() { return readAscii(codeBuf, api.coop_code(codeBuf, 32)); }
 
 // ---- names over heads -----------------------------------------------------------------------------------
 // The game draws text by key: each friend's name is stored under its own key, refreshed when it changes.
+// the weapon and health line under a friend's name (as CoopAndreas shows them)
+const WEAPON_NAMES = { 1: "Brass Knuckles", 2: "Golf Club", 3: "Nightstick", 4: "Knife", 5: "Bat", 6: "Shovel", 7: "Pool Cue",
+  8: "Katana", 9: "Chainsaw", 10: "Dildo", 11: "Dildo", 12: "Vibrator", 13: "Vibrator", 14: "Flowers", 15: "Cane",
+  16: "Grenade", 17: "Tear Gas", 18: "Molotov", 22: "Pistol", 23: "Silenced Pistol", 24: "Desert Eagle", 25: "Shotgun",
+  26: "Sawn-off", 27: "Combat Shotgun", 28: "Micro SMG", 29: "SMG", 30: "AK-47", 31: "M4", 32: "Tec-9",
+  33: "Rifle", 34: "Sniper Rifle", 35: "Rocket Launcher", 36: "Heat-Seeker", 37: "Flamethrower", 38: "Minigun",
+  39: "Satchel", 40: "Detonator", 41: "Spray Can", 42: "Extinguisher", 43: "Camera", 44: "Night Vision",
+  45: "Thermal Goggles", 46: "Parachute" };
+function infoKey(slot, r) {
+  const hp = Math.max(0, Math.round(r.health || 0));
+  const text = `${WEAPON_NAMES[r.weapon] || "Fists"}  -  HP ${hp}`;
+  if (text !== r.info) {
+    r.info = text;
+    try { FxtStore.insert(`COOPW${slot}`, text); } catch (e) {}
+  }
+  return `COOPW${slot}`;
+}
 function nameKey(slot, r) {
   const name = readAscii(nameBuf, api.coop_name(slot, nameBuf, 16)) || `Player${slot + 1}`;
   if (name !== r.name) {
@@ -205,6 +222,15 @@ function drawNames() {
       Text.SetColor(r.down ? 255 : 120, r.down ? 80 : 200, r.down ? 80 : 255, 255);
       Text.SetDropshadow(1, 0, 0, 0, 255);
       Text.Display(at.x, at.y, key);
+      // under it, smaller: the weapon in hand and the health
+      const info = infoKey(slot, r);
+      Text.UseCommands(true);
+      Text.SetFont(1);
+      Text.SetScale(0.25, 1.0);
+      Text.SetCenter(true);
+      Text.SetColor(230, 230, 230, 230);
+      Text.SetDropshadow(1, 0, 0, 0, 255);
+      Text.Display(at.x, at.y + 14, info);
     } catch (e) {
       if (!r.drawErr) { r.drawErr = true; err(`[sa-coop] draw name: ${e}`); }
     }
@@ -835,6 +861,7 @@ function syncRemotes(me, mySlot, now) {
       if (r.area !== s.interior) { r.area = s.interior; r.ped.setAreaVisible(s.interior); if (r.car) r.car.setAreaVisible(s.interior); }
       if (slot < mySlot || mySlot < 0) followClock(s.clock);
       shareWanted(r, s);
+      r.health = s.health;
       if (s.health >= 0) armRemote(r, s, now);
       if (s.health < 0) { downRemote(r, s, slot, me); continue; }
       if (r.down) { r.down = false; try { r.ped.clearTasksImmediately(); } catch (e) {} }
@@ -2477,7 +2504,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.38", EV_VERSION = 21;
+const VERSION = "0.9.39", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
