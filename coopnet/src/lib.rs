@@ -462,6 +462,56 @@ pub unsafe extern "C" fn coop_flag(op: i64, name: *const u8) -> i64 {
     }
 }
 
+/// The last crash of this game, if it is new since the last report: its message and the first frames of its stack,
+/// one line per call ("" when there is nothing more). The game writes it to Documents\Rockstar Games\GTA San Andreas
+/// Definitive Edition\Crashes\<id>\CrashContext.runtime-xml; the friend could not see it (11-15 17:49: the
+/// friend's game died 13 s after joining, and nothing of it reached this side). The script logs these lines, and
+/// every logged line goes to the friends. Reported once: %LOCALAPPDATA%\sa-de-coop\crash-reported.txt.
+#[no_mangle]
+pub unsafe extern "C" fn coop_crash_line(out: *mut u8, max: i64) -> i64 {
+    static LINES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+    let mut g = LINES.lock().unwrap();
+    let lines = g.get_or_insert_with(|| crash_report().unwrap_or_default());
+    if lines.is_empty() || out.is_null() || max <= 1 {
+        return 0;
+    }
+    let l = lines.remove(0);
+    let b: Vec<u8> = l.bytes().filter(|c| (32..127).contains(c)).take(max as usize - 1).collect();
+    std::ptr::copy_nonoverlapping(b.as_ptr(), out, b.len());
+    *out.add(b.len()) = 0;
+    b.len() as i64
+}
+
+fn crash_report() -> Option<Vec<String>> {
+    let docs = std::path::PathBuf::from(std::env::var_os("USERPROFILE")?).join(r"Documents\Rockstar Games\GTA San Andreas Definitive Edition\Crashes");
+    let newest = std::fs::read_dir(&docs).ok()?.flatten()
+        .filter_map(|e| { let f = e.path().join("CrashContext.runtime-xml"); let t = std::fs::metadata(&f).ok()?.modified().ok()?; Some((t, f)) })
+        .max_by_key(|(t, _)| *t)?;
+    let stamp = format!("{:?}", newest.0);
+    let mark = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join(r"sa-de-coop\crash-reported.txt");
+    if std::fs::read_to_string(&mark).ok().as_deref() == Some(stamp.as_str()) {
+        return None;
+    }
+    let _ = std::fs::write(&mark, &stamp);
+    let age = std::time::SystemTime::now().duration_since(newest.0).ok()?.as_secs();
+    let text = std::fs::read_to_string(&newest.1).ok()?;
+    let tag = |name: &str| -> Option<String> {
+        let a = text.find(&format!("<{name}>"))? + name.len() + 2;
+        let b = a + text[a..].find(&format!("</{name}>"))?;
+        Some(text[a..b].to_string())
+    };
+    let mut out = vec![format!("CRASH {} min ago: {}", age / 60, tag("ErrorMessage").unwrap_or_default().trim())];
+    if let Some(st) = tag("PCallStack") {
+        for l in st.lines().map(|l| l.split_whitespace().collect::<Vec<_>>()).filter(|w| w.len() >= 4).take(4) {
+            out.push(format!("CRASH at {} + {}", w_name(&l), l[3]));
+        }
+    }
+    Some(out)
+}
+fn w_name(w: &[&str]) -> String {
+    w[0].to_string()
+}
+
 /// The newest release's version ("0.8.22"), asked from GitHub once per run in the background; empty until known.
 /// The script tells the player when it is newer than what runs.
 #[no_mangle]

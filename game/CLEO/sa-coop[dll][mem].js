@@ -28,7 +28,7 @@ function areaOf(ch) {
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow", "coop_crash_line"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -145,6 +145,7 @@ function readAscii(buf, n) {
   for (let i = 0; i < n; i++) s += String.fromCharCode(Memory.ReadU8(buf + i, false, false));
   return s;
 }
+const crashBuf = Memory.Allocate(128);
 function readCode() { return readAscii(codeBuf, api.coop_code(codeBuf, 32)); }
 
 // ---- names over heads -----------------------------------------------------------------------------------
@@ -2261,7 +2262,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.23", EV_VERSION = 21;
+const VERSION = "0.9.24", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2479,7 +2480,11 @@ while (true) {
   claimWanted = status === 2; // only in a session: alone the script makes nothing
   if (status !== announced) {
     announced = status;
-    if (status === 2) say("SA Co-op: connected");
+    if (status === 2) {
+      say("SA Co-op: connected");
+      // the last crash of this game, once: logged here, so it also reaches the friends' logs
+      try { for (let i = 0; i < 6; i++) { const n = api.coop_crash_line(crashBuf, 120); if (n <= 0) break; logx(`[sa-coop] ${readAscii(crashBuf, n)}`); } } catch (e) {}
+    }
     if (status === 3) say("SA Co-op: server refused (wrong code or no free slots)");
   }
   if (status !== 2) { leaveSharedWorld(); continue; }
