@@ -303,7 +303,7 @@ export class Sim {
       coop_setting: (i) => S.settings[i] ?? 0,
       coop_native: (op) => { if (S.nativeRefuse) return 0; S.nativeOp = op; return 1; },
       coop_native_done: () => S.nativeDone,
-      coop_claim: () => 1, coop_release: () => 0, coop_flag: () => 0, coop_guest_lock: () => 0, coop_skip_take: () => (globalThis.__skipPress ? (globalThis.__skipPress = 0, 1) : 0), coop_crash_line: () => 0, coop_skip_allow: (v) => { globalThis.__skipAllowed = (globalThis.__skipAllowed || 0) + 1; return 1; },
+      coop_claim: () => 1, coop_release: () => 0, coop_flag: () => 0, coop_guest_lock: () => 0, coop_skip_take: () => (globalThis.__skipPress ? (globalThis.__skipPress = 0, 1) : 0), coop_crash_line: () => 0, coop_replayed: () => 0, coop_skip_allow: (v) => { globalThis.__skipAllowed = (globalThis.__skipAllowed || 0) + 1; return 1; },
     };
   }
   friendField(k) {

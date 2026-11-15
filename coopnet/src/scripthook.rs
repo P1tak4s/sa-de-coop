@@ -191,6 +191,96 @@ unsafe fn run_native(s: *mut u8) {
     crate::log_line(&format!("native: command {op:#06x} run on the game thread"));
 }
 
+// ---- a mission's scenes, replayed in the guest's game (the CoopAndreas way, 11-15) ---------------------------------
+// The host's mission runs its camera, fade and widescreen commands; each one is sent with its parameters, and the
+// guest's game runs the same command with the same numbers on its own game thread, through a stand-in script whose
+// instruction pointer points at those parameters (as CoopAndreas runs received opcodes through a fake CRunningScript).
+// Only commands whose parameters are plain numbers written in the script: a parameter held in a variable has
+// another value (or no meaning) in the guest's game, so such a command is not sent at all.
+pub const EV_REPLAY: u8 = 34;
+const REPLAY: &[u32] = &[
+    0x015F, // SET_FIXED_CAMERA_POSITION x y z ox oy oz
+    0x0160, // POINT_CAMERA_AT_POINT x y z mode
+    0x015A, // RESTORE_CAMERA
+    0x02EB, // RESTORE_CAMERA_JUMPCUT
+    0x0373, // SET_CAMERA_BEHIND_PLAYER
+    0x016A, // DO_FADE time direction
+    0x02A3, // SWITCH_WIDESCREEN on
+    0x0003, // SHAKE_CAM strength
+    0x0920, // CAMERA_SET_VECTOR_TRACK
+    0x0936, // CAMERA_SET_VECTOR_MOVE
+    0x092F, // CAMERA_PERSIST_TRACK
+    0x0930, // CAMERA_PERSIST_POS
+    0x0925, // CAMERA_RESET_NEW_SCRIPTABLES
+];
+static REPLAY_QUEUE: std::sync::Mutex<Vec<Vec<u8>>> = std::sync::Mutex::new(Vec::new());
+pub static REPLAYED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The parameters from `ip` to `end`, if every one is a number written in the script (types 1 int32, 4 int8, 5 int16,
+/// 6 float). None for anything else (variables, strings, arrays).
+unsafe fn plain_params(ip: usize, end: usize) -> Option<Vec<u8>> {
+    if end < ip || end - ip > 80 {
+        return None;
+    }
+    let b = std::slice::from_raw_parts(ip as *const u8, end - ip);
+    let mut i = 0;
+    while i < b.len() {
+        i += match b[i] { 1 | 6 => 5, 4 => 2, 5 => 3, _ => return None };
+    }
+    (i == b.len()).then(|| b.to_vec())
+}
+
+/// Received from the host: [opcode lo, opcode hi, parameters...].
+pub fn queue_replay(ev: &[u8]) {
+    if ev.len() < 2 || ev.len() > 84 {
+        return;
+    }
+    let op = u16::from_le_bytes([ev[0], ev[1]]) as u32;
+    if !REPLAY.contains(&op) {
+        return; // only what this build knows how to run
+    }
+    let mut q = REPLAY_QUEUE.lock().unwrap();
+    if q.len() < 64 {
+        q.push(ev.to_vec());
+    }
+}
+
+static mut STAND_IN: [u8; 0x400] = [0; 0x400];
+static mut PARAMS: [u8; 96] = [0; 96];
+unsafe fn run_replay() {
+    let game = GAME_THREAD.load(Ordering::Relaxed);
+    if game == 0 || windows_sys::Win32::System::Threading::GetCurrentThreadId() != game || crate::is_host() {
+        return;
+    }
+    let ev = {
+        let mut q = REPLAY_QUEUE.lock().unwrap();
+        if q.is_empty() {
+            return;
+        }
+        q.remove(0)
+    };
+    let op = u16::from_le_bytes([ev[0], ev[1]]) as u32;
+    let params = &ev[2..];
+    let si = std::ptr::addr_of_mut!(STAND_IN) as *mut u8;
+    let pp = std::ptr::addr_of_mut!(PARAMS) as *mut u8;
+    std::ptr::write_bytes(si, 0, 0x400);
+    std::ptr::write_bytes(pp, 0, 96);
+    std::ptr::copy_nonoverlapping(params.as_ptr(), pp, params.len());
+    *(si.add(S_IP) as *mut usize) = pp as usize;
+    *si.add(S_MISSION) = 1;
+    let h: Handler = std::mem::transmute(ORIG[(op / 100) as usize % 27]);
+    h(si, op);
+    // it read exactly what was sent, or something is wrong with this command here: say so once
+    let read = *(si.add(S_IP) as *const usize) - pp as usize;
+    if read != params.len() {
+        static SAID: AtomicBool = AtomicBool::new(false);
+        if !SAID.swap(true, Ordering::Relaxed) {
+            crate::log_line(&format!("replay: command {op:#06x} read {read} of {} bytes", params.len()));
+        }
+    }
+    REPLAYED.fetch_add(1, Ordering::Relaxed);
+}
+
 type Handler = unsafe extern "C" fn(*mut u8, u32) -> u8;
 type CanStart = unsafe extern "C" fn(*mut u8) -> u8;
 static mut ORIG: [usize; 27] = [0; 27];
@@ -285,6 +375,15 @@ unsafe extern "C" fn wrap(s: *mut u8, op: u32) -> u8 {
         STORY_CHECK.store(-1, Ordering::Relaxed);
     }
     run_native(s);
+    run_replay();
+    // the host's mission ran a scene command: the guests run it too
+    if REPLAY.contains(&op) && *s.add(S_MISSION) != 0 && connected() && crate::is_host() && crate::coop_friends() > 0 {
+        if let Some(p) = plain_params(ip, *(s.add(S_IP) as *const usize)) {
+            let mut ev = vec![EV_REPLAY, op as u8, (op >> 8) as u8];
+            ev.extend(p);
+            crate::send_raw_event(ev);
+        }
+    }
     // ask again for the partner: host only, mission scripts only, plain (not NOT-ed) checks that said no
     let partner = PARTNER_PED.load(Ordering::Relaxed);
     if partner > 0

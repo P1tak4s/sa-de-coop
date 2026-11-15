@@ -28,7 +28,7 @@ function areaOf(ch) {
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow", "coop_crash_line"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest", "coop_guest_lock", "coop_skip_take", "coop_skip_allow", "coop_crash_line", "coop_replayed"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -1260,7 +1260,7 @@ function skipAgreed() {
 // looks at, ten times a second, while a mission has its controls; the guest's camera shows the same (its controls
 // held and nothing hurting it), and is given back when the host's controls come back.
 const EV_CAM = 32;
-let camSentAt = 0, camWas = false, guestCam = false, guestCamAt = 0;
+let camSentAt = 0, camWas = false, guestCam = false, guestCamAt = 0, replayedWas = 0, replayedAt = 0;
 function camTick(now) {
   if (isGuest()) {
     if (guestCam && now - guestCamAt > 3000) endGuestCam(); // the host went quiet
@@ -1287,6 +1287,11 @@ function onCam(text, me) {
     if (dist2(me.getCoordinates(), { x: v[0], y: v[1], z: v[2] }) > 200 * 200) return; // far from it: nothing loaded there
     if (!guestCam) { guestCam = true; try { player.setControl(false); } catch (e) {} shield(me, 120000); logx("[sa-coop] the host's mission scene: shown here"); }
     guestCamAt = Date.now();
+    // the host's own camera commands are being run here (coopnet64.asi): they move the camera, not this copy
+    let replayed = 0;
+    try { replayed = api.coop_replayed(); } catch (e) {}
+    if (replayed !== replayedWas) { replayedWas = replayed; replayedAt = Date.now(); }
+    if (Date.now() - replayedAt < 2000) return;
     Camera.SetFixedPosition(v[0], v[1], v[2], 0, 0, 0);
     Camera.PointAtPoint(v[3], v[4], v[5], 2);
   } catch (e) { err(`[sa-coop] scene camera: ${e}`); }
@@ -2373,7 +2378,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.32", EV_VERSION = 21;
+const VERSION = "0.9.33", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;

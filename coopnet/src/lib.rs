@@ -164,6 +164,7 @@ fn net_thread(sess: Session) {
                     }
                 }
             }
+            EVENT if body.len() >= 2 && body[1] == scripthook::EV_REPLAY => scripthook::queue_replay(&body[2..]),
             EVENT if body.len() >= 2 && s.events_in.len() < 32 => s.events_in.push_back(body[1..].to_vec()),
             ENTS if body.len() >= 2 && body.len() == 2 + body[1] as usize * ENT_SIZE => s.ents_in = Some((body[1..].to_vec(), Instant::now())),
             WORLD if body.len() >= 2 && body.len() == 2 + body[1] as usize * WORLD_SIZE && (body[0] as usize) < MAX_PLAYERS => {
@@ -328,6 +329,20 @@ pub unsafe extern "C" fn coop_event_send(kind: i64, text: *const u8) -> i64 {
         s.events_out.push(ev);
     }
     1
+}
+
+/// An event of raw bytes from the DLL itself (kind first), sent like the script's events.
+pub fn send_raw_event(ev: Vec<u8>) {
+    let mut s = shared().lock().unwrap();
+    if s.events_out.len() < 64 {
+        s.events_out.push(ev);
+    }
+}
+
+/// How many of the host's scene commands this game has run (the script leaves the camera to them meanwhile).
+#[no_mangle]
+pub extern "C" fn coop_replayed() -> i64 {
+    scripthook::REPLAYED.load(std::sync::atomic::Ordering::Relaxed) as i64
 }
 
 /// Next received event: returns its kind (0 = none) and writes its text, null-terminated, into `out` (128 bytes).
@@ -878,6 +893,7 @@ fn steam_thread(host: bool, name: String, pw: String) {
                     }
                 }
                 REVIVE if body.len() == 2 && body[1] as i32 == s.slot => s.revived = true,
+                EVENT if body.len() >= 2 && body[1] == scripthook::EV_REPLAY => scripthook::queue_replay(&body[2..]),
                 EVENT if body.len() >= 2 && s.events_in.len() < 32 => s.events_in.push_back(body[1..].to_vec()),
                 ENTS if !body.is_empty() && body.len() == 1 + body[0] as usize * ENT_SIZE => s.ents_in = Some((body.to_vec(), Instant::now())),
                 WORLD if !body.is_empty() && body.len() == 1 + body[0] as usize * WORLD_SIZE => world_in(&mut s, slot, &body[1..]),
