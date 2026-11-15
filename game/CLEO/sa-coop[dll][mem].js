@@ -273,10 +273,12 @@ function goDown(me, now) {
   say("SA Co-op: you are down. A friend can revive you (30 s)");
 }
 
+let graceUntil = 0; // revived: protected for a moment, or the same gunfire puts us down again at once
 function getUp(me, health) {
   downed = false;
   try { me.clearTasksImmediately(); } catch (e) {}
-  me.setProofs(false, false, false, false, false);
+  if (health > 0) graceUntil = Date.now() + 3000;
+  else me.setProofs(false, false, false, false, false);
   try { me.freezePosition(false); } catch (e) {}
   try { if (downWeapon) me.setCurrentWeapon(downWeapon); } catch (e) {}
   me.setHealth(health);
@@ -284,12 +286,17 @@ function getUp(me, health) {
 
 function handleOwnHealth(me, now) {
   if (!downed) {
+    if (graceUntil) {
+      if (now < graceUntil) return;
+      graceUntil = 0;
+      me.setProofs(false, false, false, false, false);
+    }
     if (anyFriend() && me.getHealth() < DOWN_AT && me.getHealth() > 0) goDown(me, now);
     return;
   }
   banner("COOPDN1", (bleedOut() - (now - downedAt)) / 1000);
   try { if (me.getCurrentWeapon() !== 0) me.setCurrentWeapon(0); if (!me.isPlayingAnim(DOWN_ANIM[0])) Task.PlayAnim(me, DOWN_ANIM[0], DOWN_ANIM[1], 4.0, false, false, false, true, -1); } catch (e) {}
-  if (api.coop_take_revived()) { getUp(me, 60); say("SA Co-op: your friend revived you"); return; }
+  if (api.coop_take_revived()) { getUp(me, 100); say("SA Co-op: your friend revived you"); return; }
   if (now - downedAt > bleedOut() || !anyFriend()) { getUp(me, 0); } // nobody came: the game's own death
 }
 
@@ -766,6 +773,57 @@ function playCutscene(text, me) {
   playingCut = false;
 }
 
+// ---- shared skills: what either of you has learned, both have -------------------------------------------------
+// Missions ask for skills (driving, flying, lung capacity) and each game checks its own player. Every 10 s each side
+// sends its skills; a higher one from a friend is taken over, none is ever lowered. Looks (fat, muscle) stay yours.
+const EV_STATS = 10;
+const SKILL_F = [22, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79]; // stamina, weapon skills (pistol ... rifle)
+const SKILL_I = [160, 169, 225, 229, 230];                        // driving, flying, lung capacity, bike, cycling
+let statsAt = 0, statsSent = "", statsSentAt = 0, statsErr = false;
+function statsTick(now) {
+  if (now - statsAt < 10000) return;
+  statsAt = now;
+  try {
+    const text = SKILL_F.map((id) => Math.round(Stat.GetFloat(id))).concat(SKILL_I.map((id) => Stat.GetInt(id))).join(",");
+    // again every minute even when nothing changed: a friend may have joined since
+    if (text !== statsSent || now - statsSentAt > 60000) { statsSent = text; statsSentAt = now; sendEvent(EV_STATS, text); }
+  } catch (e) { if (!statsErr) { statsErr = true; log(`[sa-coop] skills: ${e}`); } }
+}
+function onStats(text) {
+  const v = text.split(",").map(Number);
+  if (v.length !== SKILL_F.length + SKILL_I.length || v.some((x) => !Number.isFinite(x) || x < 0 || x > 10000)) return;
+  const raised = [];
+  try {
+    SKILL_F.forEach((id, i) => { if (v[i] > Stat.GetFloat(id) + 0.5) { Stat.SetFloat(id, v[i]); raised.push(id); } });
+    SKILL_I.forEach((id, i) => { const t = Math.round(v[SKILL_F.length + i]); if (t > Stat.GetInt(id)) { Stat.SetInt(id, t); raised.push(id); } });
+  } catch (e) { log(`[sa-coop] skills from a friend: ${e}`); }
+  if (raised.length) log(`[sa-coop] skills raised to your friend's: ${raised.join(", ")}`);
+}
+
+// ---- which key does what, shown while it applies -----------------------------------------------------------------
+try {
+  FxtStore.insert("COOPHG", "G - get in your friend's car");
+  FxtStore.insert("COOPHF", "F - get out");
+} catch (e) {}
+function keyHints(me) {
+  if (downed) return;
+  let key = "";
+  try {
+    if (ridingOutside) key = "COOPHF";
+    else if (me.isInAnyCar()) { if (remoteWithCar(me.storeCarIsInNoSave()) >= 0) key = "COOPHF"; }
+    else {
+      const p = me.getCoordinates();
+      for (const r of remotes) {
+        if (r && r.car && !r.down && Car.DoesExist(r.car) && dist2(p, r.car.getCoordinates()) < 7 * 7) { key = "COOPHG"; break; }
+      }
+    }
+    if (!key) return;
+    Text.UseCommands(true); Text.SetFont(1); Text.SetScale(0.4, 1.6); Text.SetCenter(true);
+    Text.SetColor(255, 255, 255, 255); Text.SetDropshadow(1, 0, 0, 0, 255);
+    Text.Display(320, 395, key);
+  } catch (e) {}
+}
+
 function hearWorld(me) {
   let kind;
   while ((kind = api.coop_event_poll(evBuf)) > 0) {
@@ -777,6 +835,7 @@ function hearWorld(me) {
       const m = /ff=(\d);rev=(\d+)/.exec(text);
       if (m) { const ff = m[1] === "1", rev = Math.min(120, Math.max(10, parseInt(m[2], 10))); if (ff !== sess.ff) say(`SA Co-op: friendly fire ${ff ? "on" : "off"}`); sess.ff = ff; sess.revive = rev; }
     } else if (kind === EV_PHIT) onFriendlyHit(me, text);
+    else if (kind === EV_STATS) onStats(text);
     else if (kind === 6 || kind === 7) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
@@ -1160,6 +1219,8 @@ while (true) {
   const slotNow = api.coop_slot();
   tellWorld(slotNow, now);
   hearWorld(me);
+  statsTick(now);
+  keyHints(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
   catchUpTick(me, now);
