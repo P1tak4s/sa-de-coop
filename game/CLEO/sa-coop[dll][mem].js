@@ -1203,7 +1203,12 @@ function pollCut() {
 // skip. A press when the friend's game shows no cutscene at all (it could not play it) skips at once.
 const EV_SKIPREQ = 31;
 let skipMineAt = 0, skipTheirsAt = 0, skipSaidAt = 0, skipAllowedAt = 0, skipAnsweredAt = 0;
-function cutsceneShown() { return playingCut || Memory.ReadU8(RVA.cutRunning, false, true) === 1; }
+// a cutscene, or (the host) a mission's own scene with the controls taken: both ask the skip button. The guest's copy
+// of such a scene is only a camera (camTick): it cannot be skipped there, so the guest says yes at once.
+function cutsceneShown() {
+  if (playingCut || Memory.ReadU8(RVA.cutRunning, false, true) === 1) return true;
+  try { return !isGuest() && !!ONMISSION && !player.isControlOn(); } catch (e) { return false; }
+}
 function skipTick() {
   let pressed = 0;
   try { pressed = api.coop_skip_take(); } catch (e) { return; }
@@ -2333,7 +2338,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.29", EV_VERSION = 21;
+const VERSION = "0.9.30", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
