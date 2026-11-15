@@ -164,6 +164,21 @@ function loadModel(id) {
   return Streaming.HasModelLoaded(id);
 }
 
+// Vehicles with flashing lights (police, ambulance, fire, taxi, tow truck, work machines). The game loads their light
+// blueprint only when it makes such a vehicle itself; the first one made from a script crashed it (11-15, twice:
+// "AssembleReferenceTokenStream for BP_VehicleLight_Blinking(_Blue) called on a non-game thread"). So a copy of one
+// is made only while the game has one of its own somewhere; otherwise a plain vehicle stands in for it.
+const FLASHERS = new Set([407, 416, 420, 423, 427, 428, 430, 433, 438, 485, 486, 490, 497, 523, 524, 525, 528, 530, 532,
+                          544, 552, 574, 583, 588, 596, 597, 598, 599, 601]);
+function safeCarModel(model) {
+  if (!FLASHERS.has(model)) return model;
+  try {
+    const c = World.GetRandomCarOfTypeInAreaNoSave(-3000, -3000, 3000, 3000, model);
+    if (c && +c > 0 && Car.DoesExist(+c)) return model;
+  } catch (e) {}
+  return model === 523 ? 461 : 445; // police bike -> PCJ-600, the rest -> Admiral
+}
+
 function remoteWithCar(car) {
   for (let i = 0; i < 4; i++) if (remotes[i] && remotes[i].car && +remotes[i].car === +car) return i;
   return -1;
@@ -339,13 +354,15 @@ function driveRemote(r, s, now) {
   if (!r.car || r.carModel !== s.carModel || !Car.DoesExist(r.car)) {
     dropCar(r);
     let back = false; // back into the car they left parked: the same copy, not a second one on top of it
-    try { back = !!r.parked && Car.DoesExist(r.parked) && r.parked.getModel() === s.carModel && dist2(r.parked.getCoordinates(), s) < 8 * 8; } catch (e) {}
-    if (back) { r.car = r.parked; r.parked = null; }
+    try { back = !!r.parked && Car.DoesExist(r.parked) && r.parkedModel === s.carModel && dist2(r.parked.getCoordinates(), s) < 8 * 8; } catch (e) {}
+    if (back) { r.car = r.parked; r.parked = null; log("[sa-coop] friend is back in the parked car"); }
     else {
       dropParked(r);
-      if (!loadModel(s.carModel)) return;
-      r.car = track(Car.Create(s.carModel, s.x, s.y, s.z), 1, s.carModel);
-      Streaming.MarkModelAsNoLongerNeeded(s.carModel);
+      const use = safeCarModel(s.carModel); // r.carModel stays theirs, so a stand-in is not remade every frame
+      if (!loadModel(use)) return;
+      r.car = track(Car.Create(use, s.x, s.y, s.z), 1, use);
+      Streaming.MarkModelAsNoLongerNeeded(use);
+      log(`[sa-coop] friend's car ${s.carModel}${use !== s.carModel ? ` (shown as ${use}: its lights are not loaded here)` : ""} created: handle ${+r.car}`);
     }
     r.car.setProofs(true, true, true, true, true);
     if (s.carHealth & (1 << 24)) {
@@ -434,8 +451,9 @@ function releaseCar(r, s) {
       // we rode along: out too, or we would report this driverless car as ours
       const me = player.getChar(), c = r.car.getCoordinates();
       if (me.isInAnyCar() && +me.storeCarIsInNoSave() === +r.car) me.warpFromCarToCoord(c.x + 2.5, c.y, c.z);
-      r.car.setMission(0); r.parked = r.car;
-    }
+      r.car.setMission(0); r.parked = r.car; r.parkedModel = r.carModel;
+      log(`[sa-coop] friend left the car: ${+r.car} stays parked`);
+    } else log("[sa-coop] friend left the car: the copy was already gone");
   } catch (e) { log(`[sa-coop] release car: ${e}`); }
   r.car = null; r.carModel = 0; r.rx = null;
   return true;
@@ -447,7 +465,9 @@ function dropParked(r) {
   const car = r.parked;
   r.parked = null;
   try {
-    if (!car || !Car.DoesExist(car)) return;
+    if (!car) return;
+    if (!Car.DoesExist(car)) { log(`[sa-coop] parked car ${+car}: the game removed it`); return; }
+    log(`[sa-coop] parked car ${+car} removed`);
     untrack(car);
     const me = player.getChar();
     if (me.isInAnyCar() && +me.storeCarIsInNoSave() === +car) { car.setProofs(false, false, false, false, false); car.markAsNoLongerNeeded(); }
@@ -676,25 +696,59 @@ function tellWorld(mySlot, now) {
     if (w !== lastWeatherSent && w >= 0 && w < 64) { lastWeatherSent = w; sendEvent(EV.WEATHER, String(w)); }
   }
   const running = Memory.ReadU8(RVA.cutRunning, false, true) === 1;
-  if (running && !cutWas && !playingCut) sendEvent(EV.CUTSCENE, readStr(RVA.cutName, 24, true));
+  if (running && !cutWas && !playingCut) {
+    // with where it plays: the interior and the place, so the friend's game shows the room and not an empty sky
+    let area = 0, p = { x: 0, y: 0, z: 0 };
+    try { area = Streaming.GetAreaVisible(); p = player.getChar().getCoordinates(); } catch (e) {}
+    try { const o = Cutscene.GetOffset(); if (o && (o.xOffset || o.yOffset)) p = { x: o.xOffset, y: o.yOffset, z: o.zOffset }; } catch (e) {}
+    sendEvent(EV.CUTSCENE, `${readStr(RVA.cutName, 24, true)}|${area}|${Math.round(p.x)}|${Math.round(p.y)}|${Math.round(p.z)}`);
+  }
   cutWas = running;
   const m = missionName();
   if (m !== missionWas) { missionWas = m; sendEvent(EV.MISSION, m); }
 }
 
 // a friend's cutscene: play the same one here (only when we are free: on foot, not on our own mission)
-function playCutscene(name, me) {
+// text: name|interior|x|y|z. The game only draws the interior it is told to and only loads the map around the
+// player: without both, the friend's cutscene played in an empty sky (11-15). Ours are put back afterwards.
+function playCutscene(text, me) {
+  const [name, a, x, y, z] = text.split("|");
   if (!/^[A-Za-z0-9_]{2,24}$/.test(name) || (ONMISSION && !isGuest()) || me.isInAnyCar() || downed) return;
+  const area = Number(a), at = { x: Number(x), y: Number(y), z: Number(z) };
+  const placed = area >= 0 && area <= 255 && [at.x, at.y, at.z].every(Number.isFinite) && Math.abs(at.x) < 6000 && Math.abs(at.y) < 6000;
   playingCut = true;
+  let myArea = 0, changed = false;
   try {
+    if (placed) {
+      myArea = Streaming.GetAreaVisible();
+      Streaming.SetAreaVisible(area);
+      Streaming.RequestCollision(at.x, at.y);
+      Streaming.LoadScene(at.x, at.y, at.z);
+      changed = true;
+    }
+    try { Text.ClearHelp(); } catch (e) {}
     Cutscene.Load(name);
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) wait(25);
     if (Cutscene.HasLoaded()) {
       Cutscene.Start();
+      // the map around where the cutscene's camera really is (the sender's player may stand somewhere else)
+      wait(100);
+      try {
+        const c = Camera.GetActiveCoordinates();
+        if (!Cutscene.HasFinished() && Math.abs(c.x) < 6000 && Math.abs(c.y) < 6000) { Streaming.RequestCollision(c.x, c.y); Streaming.LoadScene(c.x, c.y, c.z); }
+      } catch (e) { log(`[sa-coop] cutscene ${name}, scene: ${e}`); }
       while (!Cutscene.HasFinished()) wait(0);
     }
     Cutscene.Clear();
   } catch (e) { log(`[sa-coop] cutscene ${name}: ${e}`); }
+  if (changed) {
+    try {
+      Streaming.SetAreaVisible(myArea);
+      const p = me.getCoordinates();
+      Streaming.RequestCollision(p.x, p.y);
+      Streaming.LoadScene(p.x, p.y, p.z);
+    } catch (e) { log(`[sa-coop] cutscene ${name}, back: ${e}`); }
+  }
   playingCut = false;
 }
 
@@ -789,9 +843,10 @@ function mirrorMissionEntities(now) {
     try {
       if (!p) {
         if (dead || !(kind === 2 ? model > 0 && model < 312 : model >= 400 && model <= 611)) continue;
-        if (!loadModel(model)) continue;
-        const ent = track(kind === 2 ? Char.Create(18, model, x, y, z) : Car.Create(model, x, y, z), kind, model);
-        Streaming.MarkModelAsNoLongerNeeded(model);
+        const use = kind === 2 ? model : safeCarModel(model);
+        if (!loadModel(use)) continue;
+        const ent = track(kind === 2 ? Char.Create(18, use, x, y, z) : Car.Create(use, x, y, z), kind, use);
+        Streaming.MarkModelAsNoLongerNeeded(use);
         let blip = null;
         if (kind === 2) {
           blip = Blip.AddForChar(ent);
