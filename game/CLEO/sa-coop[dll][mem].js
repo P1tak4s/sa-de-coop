@@ -14,7 +14,7 @@ if (!lib) { logx("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not f
 
 // Every line this script logs is also sent to the friends (who write it as "[friend] ..."), a few a second: what
 // went wrong in the other game could not be seen from here, only its errors and a status line (11-15).
-const friendLog = [];
+var friendLog = []; // var: logx may run before this line (a failed setup)
 function logx(text) {
   log(text);
   try { if (friendLog.length < 60 && !/name \d+:|world: sending|^\[friend\]/.test(text)) friendLog.push(String(text)); } catch (e) {}
@@ -272,7 +272,7 @@ function writeMine(me) {
     if (ownerSlot >= 0 && !(driver && +driver === +me)) {
       // riding with a friend: they send the car; we send which seat we are in, so their copy of us takes the same
       let seat = 0;
-      try { for (let i = 0; i < 3; i++) if (+car.getCharInCarPassengerSeat(i) === +me) { seat = i; break; } } catch (e) {}
+      try { for (let i = 0; i < 3; i++) if (+car.getCharInPassengerSeat(i) === +me) { seat = i; break; } } catch (e) {}
       inCar = 2; carModel = ownerSlot; carHealth = seat;
     } else {
       q = car.getQuaternion();
@@ -842,8 +842,10 @@ function syncRemotes(me, mySlot, now) {
 // attached to the car, and can shoot. Nobody is ever pulled out of a seat for it.
 const SEAT_OUTSIDE = 100; // sent as the "seat" while attached outside
 
+const BIKES = new Set([448, 461, 462, 463, 468, 471, 481, 509, 510, 521, 522, 523, 581, 586]);
 function isBike(car) {
-  try { return Streaming.IsThisModelABike(car.getModel()) || Streaming.IsThisModelABoat(car.getModel()); } catch (e) { return false; }
+  // IS_THIS_MODEL_A_BIKE is not in this game's command set (it threw, so every bike counted as a car): the bikes by model
+  try { const m = car.getModel(); return BIKES.has(m) || Streaming.IsThisModelABoat(m); } catch (e) { return false; }
 }
 
 // a free passenger seat, back seats first; -1 when there is none
@@ -1421,7 +1423,7 @@ function missionsTick(now) {
 function onMissionEvent(kind, text) {
   if (kind === EVM.HIT) {
     const [h, dmg] = text.split(":").map((v) => parseInt(v, 10));
-    try { if (ONMISSION && Char.DoesExist(h)) { const c = new Char(h); c.setHealth(Math.max(0, c.getHealth() - dmg)); } } catch (e) {}
+    try { if (ONMISSION && Number.isFinite(h) && Char.DoesExist(h)) { const c = new Char(h); c.setHealth(Math.max(0, c.getHealth() - dmg)); } } catch (e) {}
   } else if (kind === EVM.MONEY) {
     const earned = parseInt(text, 10);
     if (!(earned >= 0 && earned < 10000000)) return;
@@ -2204,7 +2206,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.17", EV_VERSION = 21;
+const VERSION = "0.9.18", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2240,7 +2242,7 @@ function onVersion(text, t) {
 // What goes wrong in a friend's game was invisible from here. Script errors (at most one every 5 s) and a status
 // line every 30 s are sent to the friends, who write them to their own log as "[friend] ...".
 const EV_LOG = 22;
-let errSentAt = 0, statusSentAt = 0;
+var errSentAt = 0, statusSentAt = 0; // var: err() may run before this line
 function err(text) {
   log(text);
   try { // everything in the try: this may be called before the lines above have run (a failed setup)

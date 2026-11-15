@@ -21,11 +21,11 @@ const S_NOT: usize = 0x122;
 const S_MISSION: usize = 0x12C;
 
 /// Checks a partner can answer for the host ("either player"). From SA:COOP's generic rules plus vehicle checks.
+// No "is in a car" checks (0x00DB, 0x00DD, 0x00DF, 0x0448, 0x0449, 0x047A, 0x04A7, 0x04A9, 0x04AB, 0x04C8): when the
+// partner answered "yes, in a car" the mission went on to use the HOST's car, the host had none, and the game read
+// through a null car (crash of 11-15 17:28 at 0x10B9516, [car + 0x780]). The partner driving the mission car is
+// handled by putting the partner's copy at its wheel instead (EV_DRIVE).
 const EITHER: &[u32] = &[
-    0x00DB, // IS_CHAR_IN_CAR
-    0x00DD, // IS_CHAR_IN_MODEL
-    0x00DF, // IS_CHAR_IN_ANY_CAR
-    0x0449, // IS_CHAR_IN_ANY_TRAIN? (classic: IS_CHAR_IN_ANY_POLICE_VEHICLE family varies; harmless if false)
     0x02D6, // IS_CHAR_SHOOTING_IN_AREA
     0x02E0, // IS_CHAR_SHOOTING
     0x051A, // HAS_CHAR_BEEN_DAMAGED_BY_CHAR
@@ -44,8 +44,6 @@ const EITHER: &[u32] = &[
     0x0202, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, // LOCATE_CHAR_*_CAR_2D / 3D (next to a car)
     0x0471, 0x0472, 0x0473, 0x0474, 0x0475, 0x0476, // LOCATE_CHAR_*_OBJECT_2D / 3D
     0x05F6, 0x05F7, 0x05F8, 0x05F9, 0x05FA, 0x05FB, 0x05FC, 0x05FD, 0x05FE, 0x05FF, 0x0600, 0x0601, // angled areas
-    0x0448, // IS_CHAR_SITTING_IN_CAR
-    0x047A, 0x04A7, 0x04A9, 0x04AB, 0x04C8, // on a bike, in a boat, helicopter, plane, flying vehicle
     0x0179, 0x023B, 0x0547, 0x0737, // touching an object or vehicle, holding an object
 ];
 
