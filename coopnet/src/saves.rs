@@ -42,8 +42,10 @@ pub fn newest_save() -> Option<(String, Vec<u8>)> {
     Some((name, std::fs::read(&newest).ok()?))
 }
 
-/// A guest got the host's save: switch to the co-op set (own saves backed up and put aside, as the menu toggle does)
-/// and put the host's file in the profile under the host's slot name. Returns a line for the player.
+/// A guest got the host's save. The guest's own saves are NOT moved any more (11-15: moving save files in and out
+/// while the game's cloud sync watches them left both players with slots that came and went). The host's save goes
+/// into a slot of its own: the one it used last time, else the first empty one of 1..8. A file that is in the way
+/// (the guest saved over that slot) is copied to saves-backup first. Returns a line for the player.
 pub fn receive_host_save(name: &str, bytes: &[u8]) -> Result<String, String> {
     let ok_name = name.len() < 32
         && name.to_ascii_lowercase().ends_with(".sav")
@@ -51,16 +53,25 @@ pub fn receive_host_save(name: &str, bytes: &[u8]) -> Result<String, String> {
     if !ok_name || bytes.len() < 1000 || bytes.len() > 8_000_000 {
         return Err(format!("host save refused: {name}, {} bytes", bytes.len()));
     }
-    if mode() != "coop" {
-        switch_to("coop")?;
-    }
+    let data = data_dir().ok_or("LOCALAPPDATA is not set")?;
     let profile = profile_dir().ok_or("game save folder not found")?;
-    // always into slot 1: the host's newest save is often an autosave (GTASAsf9, GTASAsf10), which the Load Game
-    // list shows in its own row or not at all. The co-op set is empty at this point, so slot 1 is free.
-    let file = "GTASAsf1.sav";
-    std::fs::write(profile.join(file), bytes).map_err(|e| format!("could not write host save: {e}"))?;
-    crate::log_line(&format!("saves: host save {name} ({} bytes) written as {}", bytes.len(), profile.join(file).display()));
-    Ok("Host's save received: Esc, Load Game, slot 1".into())
+    let marker = data.join("host-slot.txt");
+    let file = |n: u32| profile.join(format!("GTASAsf{n}.sav"));
+    let last = std::fs::read_to_string(&marker).ok().and_then(|t| t.trim().parse::<u32>().ok()).filter(|n| (1..=8).contains(n));
+    let Some(slot) = last.or_else(|| (1..=8).find(|&n| !file(n).exists())) else {
+        return Err("Host's save not stored: all 8 save slots are in use. Delete one and join again".into());
+    };
+    if file(slot).exists() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let backup = data.join("saves-backup").join(stamp.to_string());
+        let _ = std::fs::create_dir_all(&backup);
+        let _ = std::fs::copy(file(slot), backup.join(format!("GTASAsf{slot}.sav")));
+    }
+    std::fs::write(file(slot), bytes).map_err(|e| format!("could not write host save: {e}"))?;
+    let _ = std::fs::create_dir_all(&data);
+    let _ = std::fs::write(&marker, slot.to_string());
+    crate::log_line(&format!("saves: host save {name} ({} bytes) written as {}", bytes.len(), file(slot).display()));
+    Ok(format!("Host's save received: Esc, Load Game, slot {slot}"))
 }
 
 pub fn mode() -> String {

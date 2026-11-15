@@ -252,18 +252,10 @@ impl ImguiRenderLoop for CoopMenu {
                 dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &label);
                 y += ROW_H;
 
-                // own saves or a separate co-op set (switch before loading a game)
-                let coop_saves = crate::saves::mode() == "coop";
-                if row_bg(y, 3, "Saves") {
-                    let note = match crate::saves::switch_to(if coop_saves { "solo" } else { "coop" }) {
-                        Ok(n) => n,
-                        Err(e) => e,
-                    };
-                    *SAVE_NOTE.lock().unwrap() = note;
-                }
-                let label = if coop_saves { "<  Co-op  >" } else { "<  Mine  >" };
-                let ts = ui.calc_text_size(label);
-                dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], label);
+                // The "Saves" row (own saves / a separate co-op set) is gone: each click moved the save files out of
+                // the game's folder and back, and with the game's cloud sync watching, slots came and went (11-15:
+                // eight clicks in six seconds, two saves fewer afterwards). Saves stay where the game keeps them.
+                row_bg(y, 3, "");
                 y += ROW_H;
 
                 let go_label = if join_tab { "Join" } else { "Create session" };

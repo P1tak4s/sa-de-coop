@@ -240,6 +240,7 @@ function remoteWithCar(car) {
 }
 
 // ---- our state ------------------------------------------------------------------------------------------
+let shotAt = 0, ammoWeapon = 0, ammoWas = 0;
 function writeMine(me) {
   const p = me.getCoordinates();
   let v = { x: 0, y: 0, z: 0 }, q = { x: 0, y: 0, z: 0, w: 1 }, carSpeed = 0, inCar = 0, carModel = 0, carHealth = 0, carColor = 0, burnout = false;
@@ -294,7 +295,17 @@ function writeMine(me) {
   let weapon = 0, flags = 0;
   try { weapon = me.getCurrentWeapon(); } catch (e) {}
   try { if (player.isTargetingAnything()) flags |= 1; } catch (e) {}
-  try { if (me.isShooting()) flags |= 2; } catch (e) {}
+  // shooting: the game's own answer, or the ammo of the gun in hand going down (the game's answer alone showed
+  // nothing to the friend, 11-15). Held for 400 ms so single shots are not lost between two packets.
+  try {
+    if (me.isShooting()) shotAt = Date.now();
+    if (weapon > 15) {
+      const ammo = me.getAmmoInWeapon(weapon);
+      if (weapon === ammoWeapon && ammo < ammoWas) shotAt = Date.now();
+      ammoWeapon = weapon; ammoWas = ammo;
+    }
+  } catch (e) {}
+  if (Date.now() - shotAt < 400) flags |= 2;
   try { flags |= Math.min(6, player.storeWantedLevel()) << 8; } catch (e) {}
   try { flags |= (api.coop_my_skin() & 0xff) << 16; } catch (e) {}
   flags |= carColor << 24;
@@ -592,6 +603,14 @@ function walkRemote(r, s, now) {
   if (r.car && !releaseCar(r, s)) return;
   try { if (r.parked && (!Car.DoesExist(r.parked) || dist2(r.parked.getCoordinates(), s) > 150 * 150)) dropParked(r); } catch (e) {}
   leaveCar(r, s);
+  // firing: no walk task over the shot (it cancelled the shooting before it showed); only keep them in place
+  if (now - (r.lastShot || 0) < 450) {
+    try {
+      if (dist2(r.ped.getCoordinates(), s) > 3 * 3) r.ped.setCoordinatesNoOffset(s.x, s.y, s.z);
+      r.ped.setHeading(s.heading);
+    } catch (e) {}
+    return;
+  }
   if (!r.lastPos) { r.lastPos = { x: s.x, y: s.y }; r.lastT = now; r.speed = 0; r.ux = 0; r.uy = 0; }
   const mx = s.x - r.lastPos.x, my = s.y - r.lastPos.y, m = Math.sqrt(mx * mx + my * my);
   if (m > 0.0001 && now > r.lastT) {
@@ -1798,7 +1817,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.22", EV_VERSION = 21;
+const VERSION = "0.8.23", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
