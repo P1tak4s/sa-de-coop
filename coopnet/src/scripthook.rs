@@ -322,8 +322,9 @@ unsafe extern "C" fn can_start(ped: *mut u8) -> u8 {
         // ...and only when the guest is in the host's story (the script compares the two games' progress): a guest
         // that could not load the host's save was left unable to do anything at all (11-15)
         // ...and only where a story mission would start: shops, gyms, odd jobs ask the same question (STORY_CHECK)
+        // not "while the host is seen": right after a load or a reconnect the guest's game did not see the host yet
+        // for a moment, and a guest standing in a marker then started the mission in its own game (11-15 18:27)
         if !crate::is_host()
-            && crate::coop_friends() > 0
             && GUEST_LOCK.load(Ordering::Relaxed)
             && STORY_CHECK.load(Ordering::Relaxed) != 0
         {
