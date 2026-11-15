@@ -1721,6 +1721,18 @@ function blipIconTick(now) {
   if (now - blipIconAt < 1000) return;
   blipIconAt = now;
   try {
+    // A friend's icon whose character is no longer one of our friends' copies (left over after a reload or a
+    // crash; seen in the running game 11-15: two CJ heads, one of them at 0,0,0): taken off the map. Only entries
+    // with our two icons on a character are touched; nothing else in the game puts those on a character.
+    const ours = new Set();
+    for (const r of remotes) if (r) ours.add(+r.ped);
+    for (let i = 0; i < 250; i++) {
+      const e = SRVA.radar + i * 0x30;
+      if (!(Memory.ReadU8(e + 0x29, false, true) & 2)) continue;
+      const f = Memory.ReadU8(e + 0x2A, false, true), sprite = Memory.ReadU8(e + 0x28, false, true);
+      if (((f >> 2) & 15) !== 2 || !(f & 3) || (sprite !== FRIEND_ICON && sprite !== FRIEND_CAR_ICON)) continue;
+      if (!ours.has(Memory.ReadI32(e + 4, false, true))) Memory.WriteU8(e + 0x2A, f & ~3, false, true); // not shown
+    }
     for (const r of remotes) {
       if (!r || !r.blip || !Char.DoesExist(r.ped)) continue;
       const want = r.car ? FRIEND_CAR_ICON : FRIEND_ICON;
@@ -2192,7 +2204,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.15", EV_VERSION = 21;
+const VERSION = "0.9.16", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2366,7 +2378,9 @@ function refusedTick(t) {
   refusedCheckAt = t;
   let why = 0;
   try { why = api.coop_take_refused(); } catch (e) {}
-  if (!why || t - refusedAt < 8000) return;
+  // the guest's game asks at every story marker all the time, not only when the guest stands in one: said once,
+  // not every 8 s (seen in the guest's log 11-15)
+  if (!why || t - refusedAt < 8000 || (why === 1 && refusedAt)) return;
   refusedAt = t;
   if (why === 2) { // the host: a story mission starts only with both players at its marker
     say("SA Co-op: both of you must be at the marker to start a mission");

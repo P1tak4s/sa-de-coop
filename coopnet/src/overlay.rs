@@ -535,9 +535,9 @@ unsafe extern "system" fn detour(this: *mut u8, func: *mut u8, parms: *mut u8) {
                 let pause_btn = cls == "UI_Button_Menu_SA_C";
                 let hit = (menu.contains("MainMenu") || (menu.is_empty() && main_btn)) && value == 4
                     // MenuPatch inserts co-op at exit's place, so in the pause menu co-op = 7 and exit = 8. For a
-                    // few versions this said 8, and "Exit game" opened the co-op window (11-15). The entry itself
+                    // few versions this said 7 (0.9.6 to 0.9.15) and the co-op entry did nothing: the log shows it answers 8. The entry itself
                     // also calls CustomFunctionFromString("COOP") above.
-                    || (menu.contains("PauseMenu") || (menu.is_empty() && pause_btn)) && value == 7;
+                    || (menu.contains("PauseMenu") || (menu.is_empty() && pause_btn)) && value == 8;
                 crate::log_line(&format!("click on {cls} value={value} menu={menu} coop={hit}"));
                 if hit {
                     OPEN.store(true, Ordering::SeqCst);
