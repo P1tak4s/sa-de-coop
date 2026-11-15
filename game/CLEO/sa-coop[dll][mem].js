@@ -416,11 +416,36 @@ function borrowedCar(r) {
   try { return r.missionCar && Car.DoesExist(r.missionCar) ? new Car(r.missionCar) : null; } catch (e) { return null; }
 }
 
+// The car a friend starts to drive may already stand here as a copy: one of the host's mission cars (kept by the
+// mission mirror) or one of the host's traffic. Seating the friend in a NEW car made two of them on top of each
+// other (11-15: "another car appears", "both cars go wrong when he gets in"). The copy is used instead.
+function adoptCopy(r, s) {
+  try {
+    for (const [h, pr] of proxies) {
+      if (pr.kind !== 1 || pr.model !== s.carModel || !Car.DoesExist(pr.ent)) continue;
+      if (dist2(pr.ent.getCoordinates(), s) > 8 * 8) continue;
+      r.car = pr.ent; r.borrowed = true; r.borrowedProxy = h; // the mission mirror keeps owning it
+      log(`[sa-coop] friend drives the mission car we already show (${h})`);
+      return true;
+    }
+    for (const [h, pr] of worldProxies) {
+      if (pr.kind !== 1 || pr.model !== s.carModel || !Car.DoesExist(pr.ent)) continue;
+      if (dist2(pr.ent.getCoordinates(), s) > 8 * 8) continue;
+      worldProxies.delete(h); takenFromHost.add(h); // ours to move from now on
+      try { if (pr.driver && Char.DoesExist(pr.driver)) { untrack(pr.driver); pr.driver.delete(); } } catch (e) {}
+      r.car = pr.ent;
+      log(`[sa-coop] friend drives a car of their traffic we already show (${h})`);
+      return true;
+    }
+  } catch (e) { err(`[sa-coop] adopt: ${e}`); }
+  return false;
+}
+
 function dropCar(r) {
   if (!r.car) return;
-  if (r.borrowed) { // the host's own mission car: the copy of the friend gets out, the car stays as it is
+  if (r.borrowed) { // the host's own mission car or a mission copy: the friend's copy gets out, the car stays
     try { if (r.ped.isInAnyCar()) { const c = r.car.getCoordinates(); r.ped.warpFromCarToCoord(c.x + 2, c.y, c.z); } } catch (e) {}
-    r.car = null; r.carModel = 0; r.rx = null; r.borrowed = false;
+    r.car = null; r.carModel = 0; r.rx = null; r.borrowed = false; r.borrowedProxy = 0;
     return;
   }
   // never delete a car we sit in or are climbing into: get out first, or CJ is left stuck in the enter animation
@@ -480,12 +505,15 @@ function driveRemote(r, s, now) {
       try { r.ped.warpIntoCar(r.car); } catch (e) { err(`[sa-coop] mission car: ${e}`); }
       log(`[sa-coop] friend drives our mission car ${+real}`);
     } else return; // somebody of ours is at its wheel: no second car on top of it
-  } else if (!real && r.borrowed) dropCar(r);
+  } else if (!real && r.borrowed && !r.borrowedProxy) dropCar(r);
+  // a mission copy we borrowed is gone (the mission ended): nothing to drive
+  if (r.borrowed && r.borrowedProxy && !Car.DoesExist(r.car)) { r.car = null; r.carModel = 0; r.borrowed = false; r.borrowedProxy = 0; }
   if (!r.borrowed && (!r.car || r.carModel !== s.carModel || !Car.DoesExist(r.car))) {
     dropCar(r);
     let back = false; // back into the car they left parked: the same copy, not a second one on top of it
     try { back = !!r.parked && Car.DoesExist(r.parked) && r.parkedModel === s.carModel && dist2(r.parked.getCoordinates(), s) < 8 * 8; } catch (e) {}
     if (back) { r.car = r.parked; r.parked = null; log("[sa-coop] friend is back in the parked car"); }
+    else if (adoptCopy(r, s)) dropParked(r);
     else {
       dropParked(r);
       const use = safeCarModel(s.carModel); // r.carModel stays theirs, so a stand-in is not remade every frame
@@ -574,7 +602,7 @@ function releaseCar(r, s) {
   try {
     if (r.ped.isInAnyCar()) { r.ped.warpFromCarToCoord(s.x, s.y, s.z); return false; }
   } catch (e) {}
-  if (r.borrowed) { r.car = null; r.carModel = 0; r.rx = null; r.borrowed = false; return true; }
+  if (r.borrowed) { r.car = null; r.carModel = 0; r.rx = null; r.borrowed = false; r.borrowedProxy = 0; return true; }
   dropParked(r);
   try {
     if (Car.DoesExist(r.car)) {
@@ -1042,6 +1070,7 @@ function hearWorld(me) {
     else if (kind === EV_DRIVE) onDrive(text);
     else if (kind === EV_STORY) onStory(text, Date.now());
     else if (kind === EV_GUNS) onGuns(text);
+    else if (kind === EV_TAG) onTag(text);
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
   }
@@ -1123,6 +1152,7 @@ function mirrorMissionEntities(now) {
     const heading = Memory.ReadFloat(b + 20, false, false), hp = Memory.ReadFloat(b + 24, false, false);
     seen.add(h);
     if (h === drivingProxy && proxies.has(h)) continue; // we are at its wheel: our driving decides where it is
+    if (proxies.has(h) && remotes.some((r) => r && r.borrowedProxy === h)) continue; // a friend drives it: their state moves it
     let p = proxies.get(h);
     try {
       if (!p) {
@@ -1827,7 +1857,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.2", EV_VERSION = 21;
+const VERSION = "0.9.3", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -1949,6 +1979,40 @@ function onGuns(text) {
   }
 }
 
+// ---- spray tags for both ----------------------------------------------------------------------------------------------
+// A tag is sprayed in the game of the one who sprays it; the other game (and the host's mission, which counts them)
+// knew nothing of it (11-15: "it does not show for me that he tagged"). With the spray can in hand, the nearest tag
+// is watched; once it is done its place is sent and the others mark the same tag as sprayed.
+const EV_TAG = 26, SPRAY_CAN = 41;
+let tagAt = 0;
+const tagsSent = new Set();
+function tagTick(me, t) {
+  if (t - tagAt < 400) return;
+  tagAt = t;
+  try {
+    if (me.getCurrentWeapon() !== SPRAY_CAN) return;
+    const p = me.getCoordinates();
+    const tag = World.GetNearestTagPosition(p.x, p.y, p.z);
+    if (!tag || dist2(tag, p) > 12 * 12) return;
+    const key = `${Math.round(tag.x)}:${Math.round(tag.y)}`;
+    if (tagsSent.has(key)) return;
+    if (World.GetPercentageTaggedInArea(tag.x - 1.5, tag.y - 1.5, tag.x + 1.5, tag.y + 1.5) >= 100) {
+      tagsSent.add(key);
+      sendEvent(EV_TAG, key);
+      log(`[sa-coop] tag at ${key} sprayed: told the others`);
+    }
+  } catch (e) { err(`[sa-coop] tag: ${e}`); }
+}
+function onTag(text) {
+  const [x, y] = text.split(":").map(Number);
+  if (![x, y].every(Number.isFinite) || Math.abs(x) > 6000 || Math.abs(y) > 6000) return;
+  try {
+    World.SetTagStatusInArea(x - 2, y - 2, x + 2, y + 2, 255); // fully sprayed
+    tagsSent.add(text);
+    log(`[sa-coop] a friend sprayed the tag at ${text}`);
+  } catch (e) { err(`[sa-coop] tag from a friend: ${e}`); }
+}
+
 // a mission marker that does nothing says why
 let hostSaveNote = "", refusedAt = 0, refusedCheckAt = 0;
 function refusedTick(t) {
@@ -2020,6 +2084,7 @@ while (true) {
   driveProxyTick(me, now);
   storyShareTick(now);
   gunsTick(me, now);
+  tagTick(me, now);
   keyHints(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);

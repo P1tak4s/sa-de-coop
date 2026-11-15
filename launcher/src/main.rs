@@ -939,7 +939,17 @@ mod tests {
 }
 
 /// Everything the Install button does; runs on its own thread so the window never freezes.
+/// The game holds its DLLs open while it runs: our own one cannot be opened for writing then.
+fn game_running(game: &Path) -> bool {
+    let asi = game.join("coopnet64.asi");
+    asi.is_file() && std::fs::OpenOptions::new().write(true).open(&asi).is_err()
+}
+
 fn run_install(game: &Path, o: Opts) -> (bool, Vec<String>) {
+    // Never into a running game: the scripts would be replaced and the DLL not, and the two must match.
+    if game_running(game) {
+        return (false, vec!["The game is running. Close it, then press Install (or Save options) again.".into()]);
+    }
     let mut log = match install(game) {
         Ok(l) => l,
         Err(e) => return (false, vec![e]),
@@ -975,7 +985,21 @@ impl App {
         // just updated: put the new mod files into the game too (fails with a clear line if the game is running)
         if std::env::args().any(|a| a == "--updated") {
             if let Some(g) = app.game.clone().filter(|g| installed(g)) {
-                app.start(g);
+                // the new files go into the game as soon as it is not running (now, or when it is closed)
+                let job: Job = Default::default();
+                let (j, o) = (job.clone(), app.opts);
+                std::thread::spawn(move || {
+                    for _ in 0..(12 * 3600 / 3) {
+                        if !game_running(&g) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                    }
+                    let r = run_install(&g, o);
+                    *j.lock().unwrap() = Some(r);
+                });
+                app.result = None;
+                app.job = Some(job);
             }
         }
         app
@@ -1096,7 +1120,7 @@ impl eframe::App for App {
                 } else if busy {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Installing. This takes a few seconds…");
+                        ui.label(if game_running(&game) { "Waiting for the game to close, then the new version is installed…" } else { "Installing. This takes a few seconds…" });
                     });
                 } else if is_installed {
                     if big_button(ui, "Play", true).clicked() {
