@@ -48,7 +48,7 @@ Legend:
 - [~] People and cars vanishing when the friend crashes into them: logged since 0.9.26, cause not found yet
 - [~] Trains: the host's trains near the guest (0.9.38)
 - [ ] Fire
-- [ ] Pickups
+- [~] Mission pickups (0.9.45); street pickups stand in both games already
 - [ ] Gang wars
 - [ ] Unique stunt jumps
 - [ ] Cheat codes
@@ -77,12 +77,13 @@ Legend:
 - [~] Skipping a cutscene needs both players (0.9.21, 0.9.30)
 - [~] A mission's own scenes: camera, fades and widescreen replayed in the guest's game (0.9.28, 0.9.33)
 - [x] Mission enemies and allies copied to the guest, armed
+- [~] Mission enemies take 30 % more per extra player, as in CoopAndreas' missions (0.9.45)
 - [x] The mission's weapons given to the guest
 - [~] "Mission passed" with money, respect and tune for the guest (0.9.12)
 - [~] Either player counts for "be here" steps
 - [x] Either player's hits on mission enemies count (their damage is sent to the host)
 - [~] Either player's damage to mission cars counts: "destroy that car" (0.9.40)
-- [ ] Either player counts for "pick this up"
+- [~] Either player counts for "pick this up": the host's mission pickups shown to the guest, its pick-up counted in the host's game (0.9.45)
 - [ ] Sweet, Ryder and other story characters shown as themselves (a stand-in is shown)
 
 ### Story missions

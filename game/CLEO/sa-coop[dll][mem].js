@@ -1473,6 +1473,83 @@ function copyByHandle(r, slot) {
   return null;
 }
 
+// ---- the mission's pickups for both ("pick this up") --------------------------------------------------------------
+// CPickups::aPickUps (found in the exe, 11-15): 620 slots of 0x24 bytes at 0x521F7F0: position +0x14 (3 x int16, x8),
+// model +0x1C, reference +0x1E (handle = reference << 16 | slot), type +0x20 (0 = free; 3, 4, 5 = picked up once).
+// HAS_PICKUP_BEEN_COLLECTED looks the handle up in CPickups::aPickUpsCollected (20 x u32 at 0x521F790, next write at
+// the u16 0x521F7E4). The host sends its pickups of those types near the guest (street pickups of the main script
+// stand in both games already); the guest shows them; when the guest picks one up, the host writes its handle into
+// that list, exactly as the game does when its own player picks one up, and the mission goes on.
+const PK = { base: 0x521F7F0, size: 0x24, count: 620, collected: 0x521F790, collectedAt: 0x521F7E4 };
+const PK_ONCE = new Set([3, 4, 5]);
+const EV_PICKUPS = 38, EV_PICKED = 39;
+let pickupsSentAt = 0;
+const guestPickups = new Map(); // host handle -> { pickup, seen }
+function pickupsTick(me, now) {
+  if (isGuest()) {
+    for (const [h, g] of guestPickups) {
+      try {
+        if (g.pickup.hasBeenCollected()) { sendEvent(EV_PICKED, String(h)); guestPickups.delete(h); logx(`[sa-coop] picked up the host's pickup ${h}`); continue; }
+      } catch (e) {}
+      if (now - g.seen > 3000) { try { g.pickup.remove(); } catch (e) {} guestPickups.delete(h); } // gone in the host's game
+    }
+    return;
+  }
+  if (now - pickupsSentAt < 500 || !anyFriend()) return;
+  pickupsSentAt = now;
+  const around = [];
+  for (const r of remotes) { try { if (r && Char.DoesExist(r.ped)) around.push(r.ped.getCoordinates()); } catch (e) {} }
+  if (!around.length) return;
+  const parts = [];
+  try {
+    for (let i = 0; i < PK.count && parts.length < 8; i++) {
+      const a = PK.base + i * PK.size;
+      const type = Memory.ReadU8(a + 0x20, false, true);
+      if (!PK_ONCE.has(type)) continue;
+      const x = Memory.ReadI16(a + 0x14, false, true) / 8, y = Memory.ReadI16(a + 0x16, false, true) / 8, z = Memory.ReadI16(a + 0x18, false, true) / 8;
+      if (!around.some((g) => (g.x - x) ** 2 + (g.y - y) ** 2 < 150 * 150)) continue;
+      const model = Memory.ReadI16(a + 0x1C, false, true), ref = Memory.ReadU16(a + 0x1E, false, true);
+      if (model <= 0) continue;
+      parts.push(`${(ref << 16) | i},${model},${type},${x.toFixed(1)},${y.toFixed(1)},${z.toFixed(1)}`);
+    }
+  } catch (e) { err(`[sa-coop] pickups: ${e}`); }
+  sendEvent(EV_PICKUPS, parts.join(";") || "-");
+}
+function onPickups(text) {
+  if (!isGuest() || !sharedMode) return;
+  if (text === "-") return;
+  for (const part of text.split(";")) {
+    const v = part.split(",").map(Number);
+    if (v.length !== 6 || !v.every(Number.isFinite)) continue;
+    const [h, model, type, x, y, z] = v;
+    const g = guestPickups.get(h);
+    if (g) { g.seen = Date.now(); continue; }
+    try {
+      if (!loadModel(model)) continue;
+      const pickup = Pickup.Create(model, 3, x, y, z);
+      guestPickups.set(h, { pickup, seen: Date.now() });
+    } catch (e) { err(`[sa-coop] pickup ${model}: ${e}`); }
+  }
+}
+// host: the guest picked one up
+function onPicked(text) {
+  if (isGuest()) return;
+  const h = parseInt(text, 10);
+  if (!Number.isFinite(h)) return;
+  try {
+    const slot = h & 0xffff;
+    if (slot >= PK.count) return;
+    const a = PK.base + slot * PK.size;
+    if (Memory.ReadU16(a + 0x1E, false, true) !== ((h >>> 16) & 0xffff)) return; // not that pickup any more
+    let at = Memory.ReadU16(PK.collectedAt, false, true);
+    if (at >= 20) at = 0;
+    Memory.WriteI32(PK.collected + at * 4, h, false, true);
+    Memory.WriteU16(PK.collectedAt, (at + 1) % 20, false, true);
+    try { new Pickup(h).remove(); } catch (e) {}
+    logx(`[sa-coop] the friend picked up our pickup ${h}: counted`);
+  } catch (e) { err(`[sa-coop] picked: ${e}`); }
+}
+
 function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0, 118)); }
 
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
@@ -1520,6 +1597,8 @@ function hearWorld(me) {
     else if (kind === EV_RADIO) onRadio(text, me);
     else if (kind === EV_TRAIN) onTrain(text, me);
     else if (kind === EV_MYCAR) onMyCar(text);
+    else if (kind === EV_PICKUPS) onPickups(text);
+    else if (kind === EV_PICKED) onPicked(text);
     else if (kind === EV_CUTLOAD) onCutLoad(text, me);
     else if (kind === EV_CUTSKIP) { if (Memory.ReadU8(RVA.cutRunning, false, true) === 1) say("SA Co-op: your friend skipped the cutscene. Skip it too to go on together"); }
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
@@ -1571,8 +1650,22 @@ function ownMissionEntities() {
   return out;
 }
 
+// Mission enemies take more for every friend in the session (CoopAndreas writes "+30 health for every network
+// player" into its missions by hand; here it is done for every mission): once per enemy, when it is first seen.
+const scaledEnemies = new Set();
+function scaleEnemies(list) {
+  const friends = remotes.filter((r) => r).length;
+  if (!friends) return;
+  for (const e of list) {
+    if ((e.kind & 3) !== 2 || (e.kind & 4) || e.dead || scaledEnemies.has(e.h)) continue;
+    scaledEnemies.add(e.h);
+    try { const c = new Char(e.h); c.setHealth(Math.min(1000, Math.round(c.getHealth() * (1 + 0.3 * friends)))); } catch (err2) {}
+  }
+  if (scaledEnemies.size > 500) scaledEnemies.clear();
+}
 function sendMissionEntities() {
   const list = ownMissionEntities();
+  scaleEnemies(list);
   list.forEach((e, i) => {
     const b = entBuf + i * ENT_SIZE;
     Memory.WriteI32(b, e.h, false, false);
@@ -2566,7 +2659,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.43", EV_VERSION = 21;
+const VERSION = "0.9.45", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -2826,6 +2919,7 @@ while (true) {
   radioTick(me, now);
   trainTick(me, now);
   myCarTick(me, now);
+  pickupsTick(me, now);
   skipTick();
   camTick(now);
   friendLogTick(now);
