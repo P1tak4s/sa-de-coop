@@ -365,8 +365,44 @@ function leaveCar(r, s) {
   try { if (r.ped.isInAnyCar()) r.ped.warpFromCarToCoord(s.x, s.y, s.z); } catch (e) {}
 }
 
+// ---- a friend at the wheel of a mission car ------------------------------------------------------------------------
+// The guest sees a copy of the host's mission car and may drive it. In the host's game that used to make a second
+// car for the guest, and the mission never saw anybody in ITS car. Now the guest says which mission car it drives
+// (EV_DRIVE: its slot and the host's handle of that car), and the host puts the guest's copy at the wheel of the
+// real car and lets the guest's driving move it. Such a car is "borrowed": never deleted, parked or repainted by us.
+const EV_DRIVE = 23;
+let drivingProxy = 0, driveSentAt = 0;
+function driveProxyTick(me, now) {
+  let h = 0;
+  try {
+    if (me.isInAnyCar()) {
+      const car = me.storeCarIsInNoSave(), d = car.getDriver();
+      if (d && +d === +me) for (const [owner, pr] of proxies) { if (pr.kind === 1 && +pr.ent === +car) { h = owner; break; } }
+    }
+  } catch (e) {}
+  if (h !== drivingProxy || (h && now - driveSentAt > 2000)) {
+    drivingProxy = h; driveSentAt = now;
+    sendEvent(EV_DRIVE, `${api.coop_slot()}:${h}`);
+  }
+}
+function onDrive(text) {
+  const [slot, h] = text.split(":").map((v) => parseInt(v, 10));
+  const r = remotes[slot];
+  if (!r || !Number.isFinite(h)) return;
+  // only a car of our own running mission
+  r.missionCar = h > 0 && missionHandles().has(h) ? h : 0;
+}
+function borrowedCar(r) {
+  try { return r.missionCar && Car.DoesExist(r.missionCar) ? new Car(r.missionCar) : null; } catch (e) { return null; }
+}
+
 function dropCar(r) {
   if (!r.car) return;
+  if (r.borrowed) { // the host's own mission car: the copy of the friend gets out, the car stays as it is
+    try { if (r.ped.isInAnyCar()) { const c = r.car.getCoordinates(); r.ped.warpFromCarToCoord(c.x + 2, c.y, c.z); } } catch (e) {}
+    r.car = null; r.carModel = 0; r.rx = null; r.borrowed = false;
+    return;
+  }
   // never delete a car we sit in or are climbing into: get out first, or CJ is left stuck in the enter animation
   try {
     if (Car.DoesExist(r.car)) {
@@ -398,7 +434,20 @@ function removeRemote(slot) {
 
 function driveRemote(r, s, now) {
   if (r.outside) { try { r.ped.detachFromCar(0, 0, 0, false); } catch (e) {} r.outside = null; }
-  if (!r.car || r.carModel !== s.carModel || !Car.DoesExist(r.car)) {
+  const real = borrowedCar(r);
+  if (real && !(r.borrowed && +r.car === +real)) {
+    // into the real mission car, if its wheel is free (we may be driving it ourselves)
+    let free = true;
+    try { const d = real.getDriver(); free = !d || +d <= 0 || +d === +r.ped; } catch (e) {}
+    if (free) {
+      dropCar(r);
+      r.car = real; r.borrowed = true; r.carModel = s.carModel; r.rx = null;
+      leaveCar(r, s);
+      try { r.ped.warpIntoCar(r.car); } catch (e) { err(`[sa-coop] mission car: ${e}`); }
+      log(`[sa-coop] friend drives our mission car ${+real}`);
+    } else return; // somebody of ours is at its wheel: no second car on top of it
+  } else if (!real && r.borrowed) dropCar(r);
+  if (!r.borrowed && (!r.car || r.carModel !== s.carModel || !Car.DoesExist(r.car))) {
     dropCar(r);
     let back = false; // back into the car they left parked: the same copy, not a second one on top of it
     try { back = !!r.parked && Car.DoesExist(r.parked) && r.parkedModel === s.carModel && dist2(r.parked.getCoordinates(), s) < 8 * 8; } catch (e) {}
@@ -499,6 +548,7 @@ function releaseCar(r, s) {
   try {
     if (r.ped.isInAnyCar()) { r.ped.warpFromCarToCoord(s.x, s.y, s.z); return false; }
   } catch (e) {}
+  if (r.borrowed) { r.car = null; r.carModel = 0; r.rx = null; r.borrowed = false; return true; }
   dropParked(r);
   try {
     if (Car.DoesExist(r.car)) {
@@ -956,6 +1006,7 @@ function hearWorld(me) {
     else if (kind === EV_NOTE) { hostSaveNote = text; say(`SA Co-op: ${text}`); }
     else if (kind === EV_VERSION) onVersion(text, Date.now());
     else if (kind === EV_LOG) log(`[friend] ${text.replace(/`/g, " ")}`);
+    else if (kind === EV_DRIVE) onDrive(text);
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
   }
@@ -1036,6 +1087,7 @@ function mirrorMissionEntities(now) {
     const x = Memory.ReadFloat(b + 8, false, false), y = Memory.ReadFloat(b + 12, false, false), z = Memory.ReadFloat(b + 16, false, false);
     const heading = Memory.ReadFloat(b + 20, false, false), hp = Memory.ReadFloat(b + 24, false, false);
     seen.add(h);
+    if (h === drivingProxy && proxies.has(h)) continue; // we are at its wheel: our driving decides where it is
     let p = proxies.get(h);
     try {
       if (!p) {
@@ -1738,7 +1790,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.20", EV_VERSION = 21;
+const VERSION = "0.8.21", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -1845,6 +1897,7 @@ while (true) {
   versionTick(now);
   statusTick(now);
   followTick(me, now);
+  driveProxyTick(me, now);
   keyHints(me);
   missionsTick(now);
   if (pressed(KEY.G)) tryRideAlong(me);
