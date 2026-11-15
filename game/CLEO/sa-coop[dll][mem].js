@@ -905,7 +905,7 @@ function tryRideAlong(me) {
 const RVA = { cutName: 0x51AFC68, cutRunning: 0x572A430, onMission: 0x521C91C, scriptSpace: 0x51BEAE0,
               activeScripts: 0x5211718, newWeather: 0x5300FEC, forcedWeather: 0x5301008 };
 const EV = { WEATHER: 1, CUTSCENE: 2, MISSION: 3 };
-let lastWeatherSent = -1, lastWeatherAt = 0, cutWas = false, cutNameWas = "", missionWas = "", playingCut = false;
+let lastWeatherSent = -1, lastWeatherAt = 0, cutWas = false, cutNameWas = "", friendsWas = 0, missionSentAt = 0, missionWas = "", playingCut = false;
 
 function readStr(addr, n, ib) {
   let s = "";
@@ -939,7 +939,12 @@ function tellWorld(mySlot, now) {
   // a new one, or the next one of the same mission following without a gap (its name changes): before 11-15 only
   // the first was sent, and the friend got the later ones as bare dialogue lines
   const cutName = running ? readStr(RVA.cutName, 24, true) : "";
-  if (running && !playingCut && (!cutWas || (cutName && cutName !== cutNameWas))) {
+  // ...and again when a friend has just joined (the 17:33 test: the host's game started the mission and its
+  // cutscene in the seconds before the friend's game was connected, and the friend never heard of either)
+  const friends = remotes.filter((r) => r).length, joined = friends > friendsWas;
+  friendsWas = friends;
+  if (running && !playingCut && (!cutWas || (cutName && cutName !== cutNameWas) || joined)) {
+    logx(`[sa-coop] cutscene ${cutName} sent to the friends${joined ? " (they have just joined)" : ""}`);
     // with where it plays: the interior and the place, so the friend's game shows the room and not an empty sky
     let area = 0, p = { x: 0, y: 0, z: 0 };
     try { area = Streaming.GetAreaVisible(); p = player.getChar().getCoordinates(); } catch (e) {}
@@ -953,7 +958,8 @@ function tellWorld(mySlot, now) {
   }
   cutWas = running; cutNameWas = cutName;
   const m = missionName();
-  if (m !== missionWas) { missionWas = m; sendEvent(EV.MISSION, m); }
+  // said when it changes, and again every 5 s and when a friend joins: an event sent before they were there is lost
+  if (m !== missionWas || joined || (friends && now - missionSentAt > 5000)) { missionWas = m; missionSentAt = now; sendEvent(EV.MISSION, m); }
 }
 
 // a friend's cutscene: play the same one here (only when we are free: on foot, not on our own mission)
@@ -1189,6 +1195,7 @@ function sayToFriends(text) { sendEvent(EV_SAY, text.replace(/ /g, "`").slice(0,
 // A friend's mission starts or ends. The guest is taken to the host at once when it is not next to it (as in Saints
 // Row 2): left at the other end of the map it saw nothing of the mission and could not take part.
 function onFriendMission(text, me) {
+  if (text === friendMission) return; // sent again every 5 s: only a change counts
   friendMission = text;
   const started = !!text && text !== "noname";
   if (started) lastFriendMission = text;
@@ -2208,7 +2215,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.19", EV_VERSION = 21;
+const VERSION = "0.9.20", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
