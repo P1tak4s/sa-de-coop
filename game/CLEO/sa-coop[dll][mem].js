@@ -833,7 +833,11 @@ function hearWorld(me) {
   while ((kind = api.coop_event_poll(evBuf)) > 0) {
     const text = readStr(evBuf, 127, false);
     if (kind === EV.WEATHER) { const w = parseInt(text, 10); if (w >= 0 && w < 64) try { Weather.ForceNow(w); } catch (e) {} }
-    else if (kind === EV.CUTSCENE) playCutscene(text, me);
+    // A friend's cutscene is no longer played here. The game builds a cutscene's actors on the thread that starts
+    // it, and from a script that crashes the Definitive Edition whenever this game has not made them before
+    // ("AssembleReferenceTokenStream for BP_player_character_Cutscene", and BP_ProceduralInteriorProp before it,
+    // 11-15). playCutscene stays for the day it can be started on the game's own thread.
+    else if (kind === EV.CUTSCENE) say("SA Co-op: your friend is watching a cutscene");
     else if (kind === 4 || kind === 5) onMissionEvent(kind, text);
     else if (kind === EVS_SET && !api.coop_is_host()) {
       const m = /ff=(\d);rev=(\d+)/.exec(text);
