@@ -466,6 +466,21 @@ function adoptCopy(r, s) {
       log(`[sa-coop] friend drives a car of their traffic we already show (${h})`);
       return true;
     }
+    // A car of our own game standing right there: the friend took OUR car (one we parked, or one they rode in with
+    // us). A new car for them stood on top of ours until one of the two was cleared (11-15: "when he gets into my
+    // car, the same one appears and then despawns").
+    const me = player.getChar(), mine = me.isInAnyCar() ? +me.storeCarIsInNoSave() : 0;
+    const skip = ownedHandles(me);
+    for (let i = 0; i < 6; i++) {
+      const c = World.GetRandomCarInSphereNoSave(s.x, s.y, s.z, 6.0, s.carModel);
+      if (!c || +c <= 0 || !Car.DoesExist(+c)) break;
+      if (+c === mine || skip.has(+c) || tracked(+c)) continue;
+      const d = c.getDriver();
+      if (d && +d > 0 && Char.DoesExist(+d)) continue;
+      r.car = track(c, 1, s.carModel);
+      log(`[sa-coop] friend drives a car of our own game (${+c})`);
+      return true;
+    }
   } catch (e) { err(`[sa-coop] adopt: ${e}`); }
   return false;
 }
@@ -1865,6 +1880,14 @@ function updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t) {
     if (kind === 1) {
       // a flashing-light vehicle the game has not loaded here is left out (see safeCarModel)
       if (model < 400 || model > 611 || NO_COPY_CARS.has(model) || safeCarModel(model) !== model || !loadModel(model)) return;
+      // The car a friend has just got out of stands here already (their parked copy, or the copy they still sit
+      // in). Their game now sends the same car as one of its parked cars: no second copy on top of it.
+      for (const r of remotes) {
+        if (!r) continue;
+        for (const car of [r.parked, r.car]) {
+          try { if (car && Car.DoesExist(car) && car.getModel() === model && dist2(car.getCoordinates(), s) < 8 * 8) return; } catch (e) {}
+        }
+      }
       const withDriver = (flags & 1) && drv >= 7 && drv <= 288;
       if (withDriver && !loadModel(drv)) return;
       const car = track(Car.Create(model, s.x, s.y, s.z), 1, model);
@@ -1951,7 +1974,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.7", EV_VERSION = 21;
+const VERSION = "0.9.8", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
