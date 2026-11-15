@@ -128,7 +128,7 @@ impl ImguiRenderLoop for CoopMenu {
         // where the game's options panel sits: right of the menu list
         let (x0, w) = (dw * 0.30, dw * 0.62);
         // as low as the game's options panel, but never past the bottom of the screen (12.6 rows tall)
-        let y0 = (dh * 0.33).min(dh - ROW_H * 12.6 - 16.0).max(8.0);
+        let y0 = (dh * 0.33).min(dh - ROW_H * 14.6 - 16.0).max(8.0);
         let fonts = ui.fonts().fonts().to_vec();
         let (row_font, tab_font, small_font) =
             if self.fonts_ok && fonts.len() >= 3 { (Some(fonts[0]), Some(fonts[1]), Some(fonts[2])) } else { (None, None, None) };
@@ -150,7 +150,7 @@ impl ImguiRenderLoop for CoopMenu {
         let pw = &mut self.pw;
         ui.window("##sacoop")
             .position([x0, y0], Condition::Always)
-            .size([w, ROW_H * 12.6], Condition::Always)
+            .size([w, ROW_H * 14.6], Condition::Always)
             .title_bar(false)
             .resizable(false)
             .movable(false)
@@ -246,6 +246,13 @@ impl ImguiRenderLoop for CoopMenu {
                     dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &v);
                     y += ROW_H;
                     toggle(y, 2, "Drift handling", &mut o.drift);
+                    y += ROW_H;
+                    if row_bg(y, 3, "Acceleration") {
+                        o.accel = (o.accel + 1) % crate::modsettings::ACCELS.len() as u8;
+                    }
+                    let v = format!("<  x{}  >", crate::modsettings::ACCELS[o.accel as usize]);
+                    let ts = ui.calc_text_size(&v);
+                    dl.add_text([origin[0] + w - ts[0] - 30.0, y + (ROW_H - ts[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], &v);
                     y += ROW_H;
                     toggle(y, 2, "Longer gun range", &mut o.range);
                     y += ROW_H;

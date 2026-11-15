@@ -169,6 +169,13 @@ fn top_speed() -> f32 {
         .filter(|v| TOP_SPEEDS.contains(v))
         .unwrap_or(FAST_TOP_SPEED)
 }
+/// Engine acceleration multiplier (co-op menu, Settings): accel.txt ("accel=2.0"); 1.0 = as tuned.
+fn accel_mult() -> f32 {
+    std::fs::read_to_string(extras_file("accel.txt")).ok()
+        .and_then(|t| t.trim().strip_prefix("accel=")?.parse::<f32>().ok())
+        .filter(|v| (1.0..=3.0).contains(v))
+        .unwrap_or(1.0)
+}
 fn drift_on() -> bool {
     std::fs::read_to_string(extras_file("drift.txt")).is_ok_and(|t| t.trim() == "drift=1")
 }
@@ -181,6 +188,21 @@ const NOT_FAST: [&str; 19] = [
 /// One vehicle line of handling.cfg retuned; other lines unchanged. Columns: C turn mass (2), G centre of mass height (6),
 /// I traction (8), J traction loss (9), N top speed (12),
 /// O engine acceleration (13), Q drive type (15), R engine type (16), S brake deceleration (17), b damping (22).
+/// The engine acceleration (column 13) of road cars and motorbikes times `k` (trains, boats, aircraft left alone).
+fn boost_accel(line: &str, k: f32, not_fast: &std::collections::HashSet<String>) -> String {
+    let t: Vec<&str> = line.split_whitespace().collect();
+    let first = t.first().copied().unwrap_or("");
+    if k <= 1.0 || t.len() <= 22 || first.starts_with([';', '!', '$', '%', '^']) || !matches!(t[15], "F" | "R" | "4")
+        || NOT_FAST.contains(&first) || not_fast.contains(first) {
+        return line.to_string();
+    }
+    let mut out: Vec<String> = t.iter().map(|s| s.to_string()).collect();
+    if let Ok(v) = out[13].parse::<f32>() {
+        out[13] = format!("{:.3}", (v * k).min(200.0));
+    }
+    out.join(" ")
+}
+
 #[allow(dead_code)]
 fn retune_line(line: &str, grip: bool, fast: bool, not_fast: &std::collections::HashSet<String>) -> String {
     retune_line_with(line, grip, fast, false, FAST_TOP_SPEED, not_fast)
@@ -298,8 +320,8 @@ fn cars_choice(game: &Path) -> (bool, bool) {
 fn set_car_handling(extra: &Path, gameface: &Path, grip: bool, fast: bool) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     let target = gameface.join(r"Content\Paks\~mods\coopcars_P.pak");
-    let (drift, top) = (drift_on(), top_speed());
-    if !grip && !fast && !drift {
+    let (drift, top, accel) = (drift_on(), top_speed(), accel_mult());
+    if !grip && !fast && !drift && accel <= 1.0 {
         let _ = std::fs::remove_file(&target);
         return Ok("Cars: the game's own handling and speed.".into());
     }
@@ -320,7 +342,7 @@ fn set_car_handling(extra: &Path, gameface: &Path, grip: bool, fast: bool) -> Re
         .filter(|l| l.starts_with(['%', '$']))
         .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
         .collect();
-    let tuned: Vec<String> = text.lines().map(|l| retune_line_with(l, grip, fast, drift, top, &not_fast)).collect();
+    let tuned: Vec<String> = text.lines().map(|l| boost_accel(&retune_line_with(l, grip, fast, drift, top, &not_fast), accel, &not_fast)).collect();
     let tmp = std::env::temp_dir().join("sa-coop-cars");
     let _ = std::fs::remove_dir_all(&tmp);
     let file = tmp.join("dst").join(HANDLING);

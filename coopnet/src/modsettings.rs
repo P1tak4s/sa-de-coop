@@ -14,6 +14,7 @@ pub struct Opts {
     pub hard: bool, // with tough: the hard level. Kept in enemies.txt: the installer rewrites cars.txt
     pub drift: bool, // drift handling (drift.txt)
     pub speed: u16,  // top speed with "faster cars" (speed.txt)
+    pub accel: u8,   // acceleration: index into ACCELS (accel.txt)
     pub gfx: u8, // 0 off, 1 balanced, 2 high, 3 ultra
     pub dlss: bool,
 }
@@ -21,6 +22,8 @@ pub struct Opts {
 pub const GFX: [&str; 4] = ["Off", "Balanced", "High", "Ultra"];
 /// Top speeds to pick from; the same list as the installer's TOP_SPEEDS.
 pub const SPEEDS: [u16; 5] = [260, 300, 350, 400, 500];
+/// Acceleration multipliers to pick from (the installer reads accel.txt).
+pub const ACCELS: [f32; 4] = [1.0, 1.5, 2.0, 3.0];
 
 fn file() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join(r"sa-de-coop\cars.txt")
@@ -40,7 +43,11 @@ fn read() -> Opts {
         .and_then(|t| t.trim().strip_prefix("speed=")?.parse::<u16>().ok())
         .filter(|v| SPEEDS.contains(v))
         .unwrap_or(300);
-    Opts { grip: flag("grip"), fast: flag("fast"), range: flag("range"), tough: flag("tough"), hard, drift, speed, gfx, dlss: flag("dlss") }
+    let accel = std::fs::read_to_string(file().with_file_name("accel.txt")).ok()
+        .and_then(|t| t.trim().strip_prefix("accel=")?.parse::<f32>().ok())
+        .and_then(|v| ACCELS.iter().position(|a| (a - v).abs() < 0.01))
+        .unwrap_or(0) as u8;
+    Opts { grip: flag("grip"), fast: flag("fast"), range: flag("range"), tough: flag("tough"), hard, drift, speed, accel, gfx, dlss: flag("dlss") }
 }
 
 fn state() -> &'static Mutex<Option<Opts>> {
@@ -70,6 +77,7 @@ pub fn set(o: Opts) {
     let _ = std::fs::write(hard_file(), if o.hard { "hard=1\n" } else { "hard=0\n" });
     let _ = std::fs::write(file().with_file_name("drift.txt"), if o.drift { "drift=1\n" } else { "drift=0\n" });
     let _ = std::fs::write(file().with_file_name("speed.txt"), format!("speed={}\n", o.speed));
+    let _ = std::fs::write(file().with_file_name("accel.txt"), format!("accel={}\n", ACCELS[o.accel as usize % ACCELS.len()]));
     let needs_restart = Opts { tough: before.tough, hard: before.hard, ..o } != before;
     if needs_restart {
         start_helper();
