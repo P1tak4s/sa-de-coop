@@ -105,7 +105,7 @@ const remotes = [null, null, null, null];
 let downed = false, downedAt = 0, downWeapon = 0;
 
 // ---- small helpers ------------------------------------------------------------------------------------
-function say(text) { try { showTextBox(text); } catch (e) {} log(`[sa-coop] ${text}`); }
+function say(text) { if (!text) return; try { showTextBox(text); } catch (e) {} log(`[sa-coop] ${text}`); }
 
 const keyWas = {};
 function pressed(code) { // true once per press
@@ -936,7 +936,7 @@ function hearWorld(me) {
     else if (kind === EV_VERSION) onVersion(text, Date.now());
     else if (kind === EV_LOG) log(`[friend] ${text.replace(/`/g, " ")}`);
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
-    else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
+    else if (kind === EV.MISSION && (friendMission = text, true)) say(text && text !== "noname" ? "SA Co-op: your friend started a mission. Press J to join them" : text ? "" : "SA Co-op: your friend's mission ended");
   }
 }
 
@@ -1140,7 +1140,7 @@ function onFriendlyHit(me, text) {
 // mission, more than 200 m away for 8 s, a banner offers J. J works any time.
 let friendMission = "", farSince = 0;
 const KEY_J = 74, FAR = 60; // further than this during a mission: the jump (J) is offered
-try { FxtStore.insert("COOPFAR", "Your homie is far away. Press J to jump to them"); } catch (e) {}
+try { FxtStore.insert("COOPFAR", "Your friend is on a mission. Press J to join them"); } catch (e) {}
 
 function nearestFriend(me) {
   const p = me.getCoordinates();
@@ -1697,7 +1697,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.15", EV_VERSION = 21;
+const VERSION = "0.8.16", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
