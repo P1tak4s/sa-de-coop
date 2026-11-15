@@ -19,7 +19,7 @@ try {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
-  log(`[sa-coop] setup failed: ${e}`);
+  err(`[sa-coop] setup failed: ${e}`);
   exit("setup failed");
 }
 
@@ -106,7 +106,7 @@ function nameKey(slot, r) {
   const name = readAscii(nameBuf, api.coop_name(slot, nameBuf, 16)) || `Player${slot + 1}`;
   if (name !== r.name) {
     r.name = name;
-    try { FxtStore.insert(`COOPN${slot}`, name); } catch (e) { log(`[sa-coop] name key: ${e}`); }
+    try { FxtStore.insert(`COOPN${slot}`, name); } catch (e) { err(`[sa-coop] name key: ${e}`); }
   }
   return `COOPN${slot}`;
 }
@@ -157,7 +157,7 @@ function drawNames() {
       Text.SetDropshadow(1, 0, 0, 0, 255);
       Text.Display(at.x, at.y, key);
     } catch (e) {
-      if (!r.drawErr) { r.drawErr = true; log(`[sa-coop] draw name: ${e}`); }
+      if (!r.drawErr) { r.drawErr = true; err(`[sa-coop] draw name: ${e}`); }
     }
   }
 }
@@ -383,7 +383,7 @@ function driveRemote(r, s, now) {
     }
     r.car.setProofs(true, true, true, true, true);
     if (s.carHealth & (1 << 24)) {
-      try { r.car.changeColor((s.flags >>> 24) & 0xff, (s.carHealth >>> 16) & 0xff); } catch (e) { log(`[sa-coop] colour: ${e}`); }
+      try { r.car.changeColor((s.flags >>> 24) & 0xff, (s.carHealth >>> 16) & 0xff); } catch (e) { err(`[sa-coop] colour: ${e}`); }
     }
     r.carModel = s.carModel;
     leaveCar(r, s);
@@ -459,7 +459,7 @@ function rideRemote(r, s, mySlot, me) {
     const free = seat !== SEAT_OUTSIDE && seat >= 0 && car.isPassengerSeatFree(seat);
     if (free) r.ped.warpIntoCarAsPassenger(car, seat);
     else { attachOutside(r.ped, car); r.outside = car; }
-  } catch (e) { log(`[sa-coop] passenger: ${e}`); }
+  } catch (e) { err(`[sa-coop] passenger: ${e}`); }
 }
 
 // Out of a car: first the copy gets out, only on a later frame the car is let go (parked, the game clears it later).
@@ -477,7 +477,7 @@ function releaseCar(r, s) {
       r.car.setMission(0); r.parked = r.car; r.parkedModel = r.carModel;
       log(`[sa-coop] friend left the car: ${+r.car} stays parked`);
     } else log("[sa-coop] friend left the car: the copy was already gone");
-  } catch (e) { log(`[sa-coop] release car: ${e}`); }
+  } catch (e) { err(`[sa-coop] release car: ${e}`); }
   r.car = null; r.carModel = 0; r.rx = null;
   return true;
 }
@@ -495,7 +495,7 @@ function dropParked(r) {
     const me = player.getChar();
     if (me.isInAnyCar() && +me.storeCarIsInNoSave() === +car) { car.setProofs(false, false, false, false, false); car.markAsNoLongerNeeded(); }
     else car.delete();
-  } catch (e) { log(`[sa-coop] parked car: ${e}`); }
+  } catch (e) { err(`[sa-coop] parked car: ${e}`); }
 }
 
 function walkRemote(r, s, now) {
@@ -563,7 +563,7 @@ function armRemote(r, s, now) {
         if (model > 0) Streaming.MarkModelAsNoLongerNeeded(model);
       }
       r.ped.setCurrentWeapon(s.weapon);
-    } catch (e) { r.weapon = s.weapon; log(`[sa-coop] weapon ${s.weapon}: ${e}`); }
+    } catch (e) { r.weapon = s.weapon; err(`[sa-coop] weapon ${s.weapon}: ${e}`); }
   }
   if ((s.flags & 2) && s.inCar === 0 && s.weapon > 15 && now - (r.lastShot || 0) > 300) {
     const h = s.heading * Math.PI / 180;
@@ -622,7 +622,7 @@ function syncRemotes(me, mySlot, now) {
       else if (s.inCar === 2) rideRemote(r, s, mySlot, me);
       else walkRemote(r, s, now);
     } catch (e) {
-      log(`[sa-coop] sync ${slot}: ${e}`);
+      err(`[sa-coop] sync ${slot}: ${e}`);
     }
   }
 }
@@ -684,7 +684,7 @@ function tryRideAlong(me) {
     if (seat >= 0 && !(isBike(best.car))) me.warpIntoCarAsPassenger(best.car, seat);
     else if (isBike(best.car) && freeSeat(best.car) === 0) me.warpIntoCarAsPassenger(best.car, 0);
     else { attachOutside(me, best.car); ridingOutside = { car: best.car, slot: bestSlot }; say("SA Co-op: riding outside. F to get off"); }
-  } catch (e) { log(`[sa-coop] G: ${e}`); }
+  } catch (e) { err(`[sa-coop] G: ${e}`); }
 }
 
 // ---- shared world: weather, cutscenes, missions (addresses for Steam build 1.0.113.49697469) ------------
@@ -749,7 +749,7 @@ function nativeCall(op, timeoutMs) {
     const before = api.coop_native_done();
     if (!api.coop_native(op)) return false;
     for (let i = 0; i < timeoutMs / 25; i++) { wait(25); if (api.coop_native_done() !== before) return true; }
-  } catch (e) { log(`[sa-coop] native ${op}: ${e}`); }
+  } catch (e) { err(`[sa-coop] native ${op}: ${e}`); }
   return false;
 }
 function playCutscene(text, me) {
@@ -786,13 +786,13 @@ function playCutscene(text, me) {
       try { IniFile.WriteInt(0, GUARD_INI, "guard", "cutscene"); } catch (e) {}
     }
     if (!nativeCall(0x02EA, 2000)) Cutscene.Clear();
-  } catch (e) { log(`[sa-coop] cutscene ${name}: ${e}`); }
+  } catch (e) { err(`[sa-coop] cutscene ${name}: ${e}`); }
   if (changed) {
     try {
       Streaming.SetAreaVisible(myArea);
       const p = me.getCoordinates();
       Streaming.RequestCollision(p.x, p.y);
-    } catch (e) { log(`[sa-coop] cutscene ${name}, back: ${e}`); }
+    } catch (e) { err(`[sa-coop] cutscene ${name}, back: ${e}`); }
   }
   if (!started) say("SA Co-op: your friend is watching a cutscene");
   playingCut = false;
@@ -812,7 +812,7 @@ function statsTick(now) {
     const text = SKILL_F.map((id) => Math.round(Stat.GetFloat(id))).concat(SKILL_I.map((id) => Stat.GetInt(id))).join(",");
     // again every minute even when nothing changed: a friend may have joined since
     if (text !== statsSent || now - statsSentAt > 60000) { statsSent = text; statsSentAt = now; sendEvent(EV_STATS, text); }
-  } catch (e) { if (!statsErr) { statsErr = true; log(`[sa-coop] skills: ${e}`); } }
+  } catch (e) { if (!statsErr) { statsErr = true; err(`[sa-coop] skills: ${e}`); } }
 }
 function onStats(text) {
   const v = text.split(",").map(Number);
@@ -821,7 +821,7 @@ function onStats(text) {
   try {
     SKILL_F.forEach((id, i) => { if (v[i] > Stat.GetFloat(id) + 0.5) { Stat.SetFloat(id, v[i]); raised.push(id); } });
     SKILL_I.forEach((id, i) => { const t = Math.round(v[SKILL_F.length + i]); if (t > Stat.GetInt(id)) { Stat.SetInt(id, t); raised.push(id); } });
-  } catch (e) { log(`[sa-coop] skills from a friend: ${e}`); }
+  } catch (e) { err(`[sa-coop] skills from a friend: ${e}`); }
   if (raised.length) log(`[sa-coop] skills raised to your friend's: ${raised.join(", ")}`);
 }
 
@@ -892,6 +892,7 @@ function hearWorld(me) {
     else if (kind === EVW.HIT || kind === EVW.TAKE) onWorldEvent(kind, text);
     else if (kind === EV_NOTE) { hostSaveNote = text; say(`SA Co-op: ${text}`); }
     else if (kind === EV_VERSION) onVersion(text, Date.now());
+    else if (kind === EV_LOG) log(`[friend] ${text.replace(/`/g, " ")}`);
     else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
@@ -1017,7 +1018,7 @@ function mirrorMissionEntities(now) {
       } else if (Math.abs(((p.ent.getHeading() - heading + 540) % 360) - 180) > 20) {
         p.ent.setHeading(heading);
       }
-    } catch (e) { log(`[sa-coop] mission entity ${h}: ${e}`); }
+    } catch (e) { err(`[sa-coop] mission entity ${h}: ${e}`); }
   }
   for (const h of [...proxies.keys()]) if (!seen.has(h)) dropProxy(h);
 }
@@ -1133,7 +1134,7 @@ function jumpToFriend(me) {
     }
     farSince = 0;
     say("SA Co-op: you jumped to your friend");
-  } catch (e) { log(`[sa-coop] J: ${e}`); }
+  } catch (e) { err(`[sa-coop] J: ${e}`); }
 }
 
 function catchUpTick(me, now) {
@@ -1245,7 +1246,7 @@ function showGuestWords() {
   try {
     FxtStore.insert("COOPMS", guestWords);
     Text.PrintNow("COOPMS", guestWordsMs, 1);
-  } catch (e) { log(`[sa-coop] mission line: ${e}`); }
+  } catch (e) { err(`[sa-coop] mission line: ${e}`); }
 }
 
 function onStoryEvent(kind, text) {
@@ -1311,7 +1312,11 @@ const worldProxies = new Map(); // owner's handle (with its slot) -> { kind, ent
 const takenFromHost = new Set();
 let lastWorldSend = 0, lastDensityAt = 0, lastLocalClear = 0, sharedMode = false, worldDiagAt = 0, worldErr = false;
 // never copied: trains and the tram (made on rails by the game only), trailers, radio-controlled toys
-const NO_COPY_CARS = new Set([449, 537, 538, 569, 570, 590, 435, 450, 584, 591, 606, 607, 608, 610, 611, 441, 464, 465, 501, 564, 594]);
+const NO_COPY_CARS = new Set([449, 537, 538, 569, 570, 590, 435, 450, 584, 591, 606, 607, 608, 610, 611, 441, 464, 465, 501, 564, 594,
+  // aircraft, boats and machines with moving gear: their extra parts are built the way the flashing lights were
+  417, 425, 447, 460, 469, 476, 487, 488, 511, 512, 513, 519, 520, 548, 553, 563, 577, 592, 593,
+  446, 452, 453, 454, 472, 473, 484, 493, 595, 539,
+  406, 443, 486, 524, 530, 531, 532, 571, 572, 574, 525, 578, 455]);
 // the law: police, SWAT, FBI and army peds; their cars, bike, vans, helicopter, boat, tank and trucks
 const LAW_CARS = new Set([596, 597, 598, 599, 523, 427, 490, 528, 601, 497, 430, 432, 433, 470]);
 function lawPed(model) { return model >= 280 && model <= 288; }
@@ -1426,13 +1431,13 @@ function onWorldEvent(kind, text) {
       try { const d = car.getDriver(); if (d && +d > 0 && Char.DoesExist(+d)) d.delete(); } catch (e) {}
       car.delete();
     }
-  } catch (e) { log(`[sa-coop] world event ${kind} ${h}: ${e}`); }
+  } catch (e) { err(`[sa-coop] world event ${kind} ${h}: ${e}`); }
 }
 
 // ---- receiving: copies of a friend's world
 function setPopulation(on) {
-  try { World.SetPedDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { log(`[sa-coop] ped density: ${e}`); }
-  try { World.SetCarDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { log(`[sa-coop] car density: ${e}`); }
+  try { World.SetPedDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { err(`[sa-coop] ped density: ${e}`); }
+  try { World.SetCarDensityMultiplier(on ? 1.0 : 0.0); } catch (e) { err(`[sa-coop] car density: ${e}`); }
 }
 function dropWorldProxy(h) {
   const p = worldProxies.get(h);
@@ -1515,7 +1520,7 @@ function receiveWorldTick(me, t, guest) {
     const f = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => Memory.ReadFloat(b + 12 + k * 4, false, false));
     if (!f.every(Number.isFinite) || Math.abs(f[0]) > 6000 || Math.abs(f[1]) > 6000) continue;
     const s = { x: f[0], y: f[1], z: f[2], heading: f[3], vx: f[4], vy: f[5], vz: f[6], hp: f[7] };
-    try { updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t); } catch (e) { log(`[sa-coop] world ${h}: ${e}`); }
+    try { updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t); } catch (e) { err(`[sa-coop] world ${h}: ${e}`); }
   }
   for (const [h, p] of worldProxies) {
     if (t - p.seen > 1500) { dropWorldProxy(h); continue; }
@@ -1612,7 +1617,9 @@ function updateWorldProxy(h, kind, model, drv, flags, c1, c2, s, t) {
     return;
   }
   if (!Car.DoesExist(p.ent)) { worldProxies.delete(h); return; }
-  if (s.hp <= 0 && p.hp > 0) { p.hp = 0; try { p.ent.explode(); } catch (e) {} return; }
+  // a wreck in the owner's game: the copy just stops being moved (an explosion made from here would have the game
+  // build its effects on the script's thread)
+  if (s.hp <= 0) { p.hp = 0; return; }
   p.hp = s.hp;
   const c = p.ent.getCoordinates();
   const ex = s.x - c.x, ey = s.y - c.y, ez = s.z - c.z;
@@ -1647,7 +1654,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.11", EV_VERSION = 21;
+const VERSION = "0.8.12", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
@@ -1661,6 +1668,30 @@ function onVersion(text, t) {
   say(num(text) > num(VERSION)
     ? `SA Co-op: your friend has version ${text}, you have ${VERSION}. Close the game and start SA-Coop.exe to update`
     : `SA Co-op: your friend has an older version (${text}, you have ${VERSION}). They must close the game and start SA-Coop.exe`);
+}
+
+// ---- one log for both games ---------------------------------------------------------------------------------------
+// What goes wrong in a friend's game was invisible from here. Script errors (at most one every 5 s) and a status
+// line every 30 s are sent to the friends, who write them to their own log as "[friend] ...".
+const EV_LOG = 22;
+let errSentAt = 0, statusSentAt = 0;
+function err(text) {
+  log(text);
+  try { // everything in the try: this may be called before the lines above have run (a failed setup)
+    const t = Date.now();
+    if (t - errSentAt < 5000) return;
+    errSentAt = t;
+    sendEvent(EV_LOG, text.replace(/^\[sa-coop\] /, "E:").replace(/ /g, "`").slice(0, 118));
+  } catch (e) {}
+}
+function statusTick(t) {
+  if (t - statusSentAt < 30000) return;
+  statusSentAt = t;
+  try {
+    const st = `S:v${VERSION}` + (isGuest() ? ` guest shared=${sharedMode ? 1 : 0}` : " host") + ` copies=${worldProxies.size} mission=${proxies.size}` +
+      ` area=${Streaming.GetAreaVisible()}` + (cutOff ? " cutscenes-off" : "");
+    sendEvent(EV_LOG, st.replace(/ /g, "`"));
+  } catch (e) {}
 }
 
 // a mission marker that does nothing says why
@@ -1683,7 +1714,7 @@ function sharedWorldTick(me, t) {
     if (guest) guestModeTick(me, t);
     sendWorldTick(me, t, guest);
     receiveWorldTick(me, t, guest);
-  } catch (e) { if (!worldErr) { worldErr = true; log(`[sa-coop] world: ${e}`); } }
+  } catch (e) { if (!worldErr) { worldErr = true; err(`[sa-coop] world: ${e}`); } }
 }
 
 let started = false, announced = -1, lastCode = "", lastCodeCheck = 0;
@@ -1727,6 +1758,7 @@ while (true) {
   sharedWorldTick(me, now);
   refusedTick(now);
   versionTick(now);
+  statusTick(now);
   followTick(me, now);
   keyHints(me);
   missionsTick(now);
