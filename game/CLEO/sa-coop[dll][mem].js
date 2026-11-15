@@ -15,7 +15,7 @@ if (!lib) { log("[sa-coop] coopnet64.asi not found"); exit("coopnet64.asi not fo
 const api = {};
 try {
   for (const name of ["coop_start", "coop_host", "coop_join_clipboard", "coop_code", "coop_status", "coop_slot",
-                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release"]) {
+                      "coop_send", "coop_get", "coop_revive", "coop_take_revived", "coop_name", "coop_event_send", "coop_event_poll", "coop_ents_send", "coop_ents_get", "coop_is_host", "coop_my_skin", "coop_set_partner", "coop_track", "coop_untrack", "coop_take_tracked", "coop_setting", "coop_world_send", "coop_world_get", "coop_tracked", "coop_take_refused", "coop_native", "coop_native_done", "coop_claim", "coop_release", "coop_flag", "coop_latest"]) {
     api[name] = Memory.Fn.X64(lib.getProcedure(name));
   }
 } catch (e) {
@@ -80,9 +80,18 @@ function banner(key, num, y) {
 // See coopnet/src/scripthook.rs: CLEO runs us on a thread of our own while the game thread waits, and the game
 // refuses to build anything "on a non-game thread". For our turn we are the game thread; before every wait the real
 // one is put back. Behind a marker: if the game dies in the first 20 s of the first claim, the next run goes without.
-const CLAIM_INI = "sa-coop-guard.ini";
+// marker files kept by coopnet64.asi (a script may not write files without [fs] in its name: the ini markers of
+// 0.8.11 to 0.8.21 never worked, the log shows CLEO refusing them)
+const flagBuf = Memory.Allocate(32);
+function flag(op, name) {
+  try {
+    for (let i = 0; i < name.length && i < 24; i++) Memory.WriteU8(flagBuf + i, name.charCodeAt(i) & 0x7f, false, false);
+    Memory.WriteU8(flagBuf + Math.min(name.length, 24), 0, false, false);
+    return api.coop_flag(op, flagBuf);
+  } catch (e) { return 0; }
+}
 let claimOff = false, claimWanted = false, claimFrom = 0, claimSafe = false;
-try { claimOff = IniFile.ReadInt(CLAIM_INI, "guard", "claim") === 1; if (claimOff) log("[sa-coop] game thread claim: the game died right after one last time, off"); } catch (e) {}
+try { claimOff = flag(0, "claim") === 1; if (claimOff) log("[sa-coop] game thread claim: the game died right after one last time, off"); } catch (e) {}
 function pause(ms) {
   try { api.coop_release(); } catch (e) {}
   wait(ms);
@@ -90,12 +99,12 @@ function pause(ms) {
   try {
     if (api.coop_claim() === 1 && !claimFrom) {
       claimFrom = Date.now();
-      try { IniFile.WriteInt(1, CLAIM_INI, "guard", "claim"); } catch (e) {}
+      try { flag(1, "claim"); } catch (e) {}
       log("[sa-coop] game thread claim: on");
     }
     if (claimFrom && !claimSafe && Date.now() - claimFrom > 20000) {
       claimSafe = true;
-      try { IniFile.WriteInt(0, CLAIM_INI, "guard", "claim"); } catch (e) {}
+      try { flag(2, "claim"); } catch (e) {}
     }
   } catch (e) {}
 }
@@ -821,22 +830,21 @@ function tellWorld(mySlot, now) {
 // the cutscene's actors for the first time ("AssembleReferenceTokenStream for BP_player_character_Cutscene",
 // 11-15). A marker in an ini file guards it: if the game dies during a start, the next run only says that the
 // friend is watching one. The interior it plays in is shown; the game streams the place itself.
-const GUARD_INI = "sa-coop-guard.ini";
 let cutOff = false;
-try { cutOff = IniFile.ReadInt(GUARD_INI, "guard", "cutscene") === 1; if (cutOff) log("[sa-coop] cutscenes: the game died during one last time, off"); } catch (e) {}
+try { cutOff = flag(0, "cutscene") === 1; if (cutOff) log("[sa-coop] cutscenes: the game died during one last time, off"); } catch (e) {}
 // A mission's texts (its lines and its cutscenes' subtitles) are only in memory while that mission's text table is
 // loaded, and the guest runs no mission: a cutscene played here showed "INT2_FA missing!" for every subtitle
 // (11-15). The table is named after the mission script. Behind the same kind of marker as the cutscenes.
 let textTable = "", textOff = false;
-try { textOff = IniFile.ReadInt(GUARD_INI, "guard", "missiontext") === 1; if (textOff) log("[sa-coop] mission text: the game died loading one last time, off"); } catch (e) {}
+try { textOff = flag(0, "missiontext") === 1; if (textOff) log("[sa-coop] mission text: the game died loading one last time, off"); } catch (e) {}
 function loadFriendText(mission) {
   const table = String(mission || "").toUpperCase();
   if (textOff || table === textTable || !/^[A-Z0-9_]{2,7}$/.test(table) || table === "NONAME") return;
   textTable = table;
   try {
-    IniFile.WriteInt(1, GUARD_INI, "guard", "missiontext");
+    flag(1, "missiontext");
     Text.LoadMissionText(table);
-    IniFile.WriteInt(0, GUARD_INI, "guard", "missiontext");
+    flag(2, "missiontext");
     log(`[sa-coop] mission text ${table} loaded`);
   } catch (e) { err(`[sa-coop] mission text ${table}: ${e}`); }
 }
@@ -869,7 +877,7 @@ function playCutscene(text, me) {
     Cutscene.Load(name);
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) pause(25);
     if (Cutscene.HasLoaded()) {
-      try { IniFile.WriteInt(1, GUARD_INI, "guard", "cutscene"); } catch (e) {}
+      try { flag(1, "cutscene"); } catch (e) {}
       started = nativeCall(0x02E7, 2000);
       if (started) {
         const from = Date.now();
@@ -877,11 +885,11 @@ function playCutscene(text, me) {
         while (!Cutscene.HasFinished()) {
           pause(0);
           // it has been running for 3 s: the start did not kill the game
-          if (!cleared && Date.now() - from > 3000) { cleared = true; try { IniFile.WriteInt(0, GUARD_INI, "guard", "cutscene"); } catch (e) {} }
+          if (!cleared && Date.now() - from > 3000) { cleared = true; try { flag(2, "cutscene"); } catch (e) {} }
         }
         log(`[sa-coop] cutscene ${name} played`);
       } else log(`[sa-coop] cutscene ${name}: the game's own thread did not take the start, not shown`);
-      try { IniFile.WriteInt(0, GUARD_INI, "guard", "cutscene"); } catch (e) {}
+      try { flag(2, "cutscene"); } catch (e) {}
     }
     if (!nativeCall(0x02EA, 2000)) Cutscene.Clear();
   } catch (e) { err(`[sa-coop] cutscene ${name}: ${e}`); }
@@ -1790,12 +1798,28 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.21", EV_VERSION = 21;
+const VERSION = "0.8.22", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
   versionSentAt = t;
   sendEvent(EV_VERSION, VERSION);
+}
+// a newer release than the one running: said in the game, every 10 minutes until it is installed
+const latestBuf = Memory.Allocate(32);
+let latestAt = 0, latestToldAt = 0;
+function latestTick(t) {
+  if (t - latestAt < 30000) return;
+  latestAt = t;
+  try {
+    const latest = readAscii(latestBuf, api.coop_latest(latestBuf, 32));
+    if (!/^\d+\.\d+\.\d+$/.test(latest)) return;
+    const num = (v) => v.split(".").reduce((a, n) => a * 1000 + Number(n), 0);
+    if (num(latest) > num(VERSION) && (!latestToldAt || t - latestToldAt > 600000)) {
+      latestToldAt = t;
+      say(`SA Co-op: version ${latest} is out (you have ${VERSION}). Close the game and start SA-Coop.exe to get it`);
+    }
+  } catch (e) {}
 }
 function onVersion(text, t) {
   if (!/^\d+\.\d+\.\d+$/.test(text) || text === VERSION || t - versionToldAt < 60000) return;
@@ -1895,6 +1919,7 @@ while (true) {
   sharedWorldTick(me, now);
   refusedTick(now);
   versionTick(now);
+  latestTick(now);
   statusTick(now);
   followTick(me, now);
   driveProxyTick(me, now);

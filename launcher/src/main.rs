@@ -898,16 +898,24 @@ fn start_update(state: std::sync::Arc<std::sync::Mutex<Upd>>, ctx: egui::Context
     if !packaged || std::env::args().any(|a| a == "--updated") {
         return; // --updated: we were just replaced; never loop if the exe in a release reports an older version
     }
-    std::thread::spawn(move || {
-        let Some(u) = check_update() else { return };
-        *state.lock().unwrap() = Upd::Working(u.version.clone());
-        ctx.request_repaint();
-        let r = apply_update(&u);
-        *state.lock().unwrap() = match r {
-            Ok(()) => Upd::Done(u.version),
-            Err(e) => Upd::Failed(format!("Could not update to v{}: {e}. You can download it from GitHub.", u.version)),
-        };
-        ctx.request_repaint();
+    // Not only at start: the window is often left open for hours and Play pressed again and again. In the first
+    // real sessions both players stayed nine versions behind that way (11-15). Looked for every 45 s.
+    std::thread::spawn(move || loop {
+        if let Some(u) = check_update() {
+            *state.lock().unwrap() = Upd::Working(u.version.clone());
+            ctx.request_repaint();
+            let r = apply_update(&u);
+            let ok = r.is_ok();
+            *state.lock().unwrap() = match r {
+                Ok(()) => Upd::Done(u.version),
+                Err(e) => Upd::Failed(format!("Could not update to v{}: {e}. You can download it from GitHub.", u.version)),
+            };
+            ctx.request_repaint();
+            if ok {
+                return; // the window restarts into the new version
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(45));
     });
 }
 

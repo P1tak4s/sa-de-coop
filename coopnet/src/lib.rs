@@ -434,6 +434,64 @@ impl SaveIn {
     }
 }
 
+/// A marker file in the data folder: op 1 = create, 2 = delete, 0 = 1 if it is there. A script sets one before
+/// something that might kill the game and clears it after: still there on the next run = it did. (The script cannot
+/// write files itself: CLEO only lets a script do that with [fs] in its file name.)
+#[no_mangle]
+pub unsafe extern "C" fn coop_flag(op: i64, name: *const u8) -> i64 {
+    let n = c_str(name);
+    if n.is_empty() || n.len() > 24 || !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return 0;
+    }
+    let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("sa-de-coop")) else { return 0 };
+    let path = dir.join(format!("{n}.flag"));
+    match op {
+        1 => {
+            let _ = std::fs::create_dir_all(&dir);
+            std::fs::write(&path, b"1").is_ok() as i64
+        }
+        2 => std::fs::remove_file(&path).is_ok() as i64,
+        _ => path.exists() as i64,
+    }
+}
+
+/// The newest release's version ("0.8.22"), asked from GitHub once per run in the background; empty until known.
+/// The script tells the player when it is newer than what runs.
+#[no_mangle]
+pub unsafe extern "C" fn coop_latest(out: *mut u8, max: i64) -> i64 {
+    static LATEST: Mutex<String> = Mutex::new(String::new());
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        std::thread::spawn(|| loop {
+            let got = ureq::get("https://api.github.com/repos/P1tak4s/sa-de-coop/releases?per_page=1")
+                .set("User-Agent", "sa-coop")
+                .timeout(Duration::from_secs(10))
+                .call()
+                .ok()
+                .and_then(|r| r.into_string().ok());
+            if let Some(text) = got {
+                // "tag_name":"v0.8.22"
+                if let Some(at) = text.find("\"tag_name\"") {
+                    let rest = &text[at + 10..];
+                    let v: String = rest.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    if v.split('.').count() == 3 {
+                        *LATEST.lock().unwrap() = v;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_secs(300)); // again every 5 minutes: a session lasts hours
+        });
+    }
+    if out.is_null() || max <= 1 {
+        return 0;
+    }
+    let s = LATEST.lock().unwrap().clone();
+    let n = s.len().min(max as usize - 1);
+    std::ptr::copy_nonoverlapping(s.as_ptr(), out, n);
+    *out.add(n) = 0;
+    n as i64
+}
+
 /// This build of the game is the one our addresses are for (the script hook found its tables).
 pub(crate) fn game_build_ok() -> bool {
     scripthook::installed()
