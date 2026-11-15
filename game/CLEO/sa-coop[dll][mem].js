@@ -844,7 +844,7 @@ function hearWorld(me) {
     else if (kind === EV_STATS) onStats(text);
     else if (kind === EVW.HIT || kind === EVW.TAKE) onWorldEvent(kind, text);
     else if (kind === EV_NOTE) { hostSaveNote = text; say(`SA Co-op: ${text}`); }
-    else if (kind === 6 || kind === 7) onStoryEvent(kind, text);
+    else if (kind === 6 || kind === 7 || kind === 15 || kind === 16) onStoryEvent(kind, text);
     else if (kind === EV.MISSION && (friendMission = text, true)) say(text ? `SA Co-op: your friend started a mission (${text})` : "SA Co-op: your friend's mission ended");
   }
 }
@@ -1105,7 +1105,7 @@ function catchUpTick(me, now) {
 // Guest: its own missions are switched off ($ONMISSION held at 1, so no mission markers or triggers), and it sees
 // the host's mission text and destination blips. Host: sends them. Addresses: Steam build 1.0.113.49697469.
 const SRVA = { scriptSpace: 0x51BEAE0, onMission: 0x521C91C, brief: 0x531CB70, radar: 0x542A7B0 };
-const EVS = { TEXT: 6, BLIPS: 7 };
+const EVS = { TEXT: 6, BLIPS: 7, WORDS: 15, MORE: 16 };
 let lastBriefKey = "", lastBlipsSent = "", lastBlipsAt = 0, guestLocked = false;
 let guestBlips = [];
 
@@ -1147,7 +1147,14 @@ function storyTick(now) {
     const key = readStr(SRVA.brief, 7, true);
     if (key && key !== lastBriefKey) {
       lastBriefKey = key;
-      sendEvent(EVS.TEXT, `${key}:${Memory.ReadU32(SRVA.brief + 0x14, false, true)}`);
+      const ms = Memory.ReadU32(SRVA.brief + 0x14, false, true);
+      // the words themselves, not the key: the guest's game has no texts of a mission it is not running and
+      // showed "INT2_CG missing!" (11-15). Spaces travel as ` (events carry no spaces); two events when long.
+      const words = readBriefText().replace(/`/g, "'").replace(/ /g, "`");
+      if (words) {
+        sendEvent(EVS.WORDS, `${ms}|${words.slice(0, 110)}`);
+        if (words.length > 110) sendEvent(EVS.MORE, words.slice(110, 228));
+      } else sendEvent(EVS.TEXT, `${key}:${ms}`);
     }
   } else {
     lastBriefKey = "";
@@ -1168,28 +1175,40 @@ function storyTick(now) {
   if (msg !== lastBlipsSent) { lastBlipsSent = msg; sendEvent(EVS.BLIPS, msg || "-"); }
 }
 
-// The host's mission lines come as text keys, and a mission's texts are only in memory while that mission's table
-// is loaded: without it the guest read "INT2_CG missing!" (11-15). The table is named after the mission script.
-// Guarded by a marker in an ini file: if the game ever dies inside the load, the next run leaves it alone.
-const GUARD_INI = "sa-coop-guard.ini";
-let textTable = "", textOff = false;
-try { textOff = IniFile.ReadInt(GUARD_INI, "guard", "missiontext") === 1; if (textOff) log("[sa-coop] mission text: the load crashed last time, off"); } catch (e) {}
-function loadFriendText(mission) {
-  const table = String(mission || "").toUpperCase();
-  if (textOff || table === textTable || !/^[A-Z0-9_]{2,7}$/.test(table)) return;
-  textTable = table;
+// the mission line on the host's screen: brief + 8 points at its text (8-bit or 16-bit characters), ASCII only
+function readBriefText() {
   try {
-    IniFile.WriteInt(1, GUARD_INI, "guard", "missiontext");
-    Text.LoadMissionText(table);
-    IniFile.WriteInt(0, GUARD_INI, "guard", "missiontext");
-    log(`[sa-coop] mission text ${table} loaded`);
-  } catch (e) { log(`[sa-coop] mission text ${table}: ${e}`); }
+    const at = ptr(SRVA.brief + 8, true);
+    if (at < 0x10000 || at > 0x7FFFFFFFFFFF) return "";
+    const wide = Memory.ReadU8(at + 1, false, false) === 0 && Memory.ReadU8(at, false, false) !== 0;
+    let out = "";
+    for (let i = 0; i < 228; i++) {
+      const c = wide ? Memory.ReadU16(at + i * 2, false, false) : Memory.ReadU8(at + i, false, false);
+      if (!c) break;
+      out += c >= 32 && c < 127 ? String.fromCharCode(c) : "?";
+    }
+    return out.trim();
+  } catch (e) { return ""; }
+}
+let guestWords = "", guestWordsMs = 4000;
+function showGuestWords() {
+  try {
+    FxtStore.insert("COOPMS", guestWords);
+    Text.PrintNow("COOPMS", guestWordsMs, 1);
+  } catch (e) { log(`[sa-coop] mission line: ${e}`); }
 }
 
 function onStoryEvent(kind, text) {
   if (!isGuest()) return;
-  if (kind === EVS.TEXT) {
-    loadFriendText(friendMission);
+  if (kind === EVS.WORDS) {
+    const cut = text.indexOf("|");
+    guestWordsMs = Math.min(parseInt(text.slice(0, cut), 10) || 4000, 15000);
+    guestWords = text.slice(cut + 1).replace(/`/g, " ");
+    showGuestWords();
+  } else if (kind === EVS.MORE) {
+    guestWords += text.replace(/`/g, " ");
+    showGuestWords();
+  } else if (kind === EVS.TEXT) {
     const [key, ms] = text.split(":");
     if (/^[A-Z0-9_]{1,7}$/i.test(key)) { try { Text.PrintNow(key, Math.min(parseInt(ms, 10) || 4000, 15000), 1); } catch (e) {} }
   } else if (kind === EVS.BLIPS) {
