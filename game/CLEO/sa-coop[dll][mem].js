@@ -744,6 +744,23 @@ function tellWorld(mySlot, now) {
 const GUARD_INI = "sa-coop-guard.ini";
 let cutOff = false;
 try { cutOff = IniFile.ReadInt(GUARD_INI, "guard", "cutscene") === 1; if (cutOff) log("[sa-coop] cutscenes: the game died during one last time, off"); } catch (e) {}
+// A mission's texts (its lines and its cutscenes' subtitles) are only in memory while that mission's text table is
+// loaded, and the guest runs no mission: a cutscene played here showed "INT2_FA missing!" for every subtitle
+// (11-15). The table is named after the mission script. Behind the same kind of marker as the cutscenes.
+let textTable = "", textOff = false;
+try { textOff = IniFile.ReadInt(GUARD_INI, "guard", "missiontext") === 1; if (textOff) log("[sa-coop] mission text: the game died loading one last time, off"); } catch (e) {}
+function loadFriendText(mission) {
+  const table = String(mission || "").toUpperCase();
+  if (textOff || table === textTable || !/^[A-Z0-9_]{2,7}$/.test(table) || table === "NONAME") return;
+  textTable = table;
+  try {
+    IniFile.WriteInt(1, GUARD_INI, "guard", "missiontext");
+    Text.LoadMissionText(table);
+    IniFile.WriteInt(0, GUARD_INI, "guard", "missiontext");
+    log(`[sa-coop] mission text ${table} loaded`);
+  } catch (e) { err(`[sa-coop] mission text ${table}: ${e}`); }
+}
+
 function nativeCall(op, timeoutMs) {
   try {
     const before = api.coop_native_done();
@@ -768,6 +785,7 @@ function playCutscene(text, me) {
       changed = true;
     }
     try { Text.ClearHelp(); } catch (e) {}
+    loadFriendText(friendMission); // its subtitles
     Cutscene.Load(name);
     for (let i = 0; i < 400 && !Cutscene.HasLoaded(); i++) wait(25);
     if (Cutscene.HasLoaded()) {
@@ -1260,6 +1278,7 @@ function onStoryEvent(kind, text) {
     guestWords += text.replace(/`/g, " ");
     showGuestWords();
   } else if (kind === EVS.TEXT) {
+    loadFriendText(friendMission);
     const [key, ms] = text.split(":");
     if (/^[A-Z0-9_]{1,7}$/i.test(key)) { try { Text.PrintNow(key, Math.min(parseInt(ms, 10) || 4000, 15000), 1); } catch (e) {} }
   } else if (kind === EVS.BLIPS) {
@@ -1654,7 +1673,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.12", EV_VERSION = 21;
+const VERSION = "0.8.13", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
