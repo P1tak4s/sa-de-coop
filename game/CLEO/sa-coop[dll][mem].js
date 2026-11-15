@@ -852,7 +852,7 @@ function tryRideAlong(me) {
 const RVA = { cutName: 0x51AFC68, cutRunning: 0x572A430, onMission: 0x521C91C, scriptSpace: 0x51BEAE0,
               activeScripts: 0x5211718, newWeather: 0x5300FEC, forcedWeather: 0x5301008 };
 const EV = { WEATHER: 1, CUTSCENE: 2, MISSION: 3 };
-let lastWeatherSent = -1, lastWeatherAt = 0, cutWas = false, missionWas = "", playingCut = false;
+let lastWeatherSent = -1, lastWeatherAt = 0, cutWas = false, cutNameWas = "", missionWas = "", playingCut = false;
 
 function readStr(addr, n, ib) {
   let s = "";
@@ -883,14 +883,17 @@ function tellWorld(mySlot, now) {
     if (w !== lastWeatherSent && w >= 0 && w < 64) { lastWeatherSent = w; sendEvent(EV.WEATHER, String(w)); }
   }
   const running = Memory.ReadU8(RVA.cutRunning, false, true) === 1;
-  if (running && !cutWas && !playingCut) {
+  // a new one, or the next one of the same mission following without a gap (its name changes): before 11-15 only
+  // the first was sent, and the friend got the later ones as bare dialogue lines
+  const cutName = running ? readStr(RVA.cutName, 24, true) : "";
+  if (running && !playingCut && (!cutWas || (cutName && cutName !== cutNameWas))) {
     // with where it plays: the interior and the place, so the friend's game shows the room and not an empty sky
     let area = 0, p = { x: 0, y: 0, z: 0 };
     try { area = Streaming.GetAreaVisible(); p = player.getChar().getCoordinates(); } catch (e) {}
     try { const o = Cutscene.GetOffset(); if (o && (o.xOffset || o.yOffset)) p = { x: o.xOffset, y: o.yOffset, z: o.zOffset }; } catch (e) {}
     sendEvent(EV.CUTSCENE, `${readStr(RVA.cutName, 24, true)}|${area}|${Math.round(p.x)}|${Math.round(p.y)}|${Math.round(p.z)}`);
   }
-  cutWas = running;
+  cutWas = running; cutNameWas = cutName;
   const m = missionName();
   if (m !== missionWas) { missionWas = m; sendEvent(EV.MISSION, m); }
 }
@@ -931,8 +934,15 @@ function nativeCall(op, timeoutMs) {
 }
 function playCutscene(text, me) {
   const [name, a, x, y, z] = text.split("|");
-  if (!/^[A-Za-z0-9_]{2,24}$/.test(name) || (ONMISSION && !isGuest()) || me.isInAnyCar() || downed) return;
+  if (!/^[A-Za-z0-9_]{2,24}$/.test(name) || (ONMISSION && !isGuest()) || downed) return;
   if (cutOff) { say("SA Co-op: your friend is watching a cutscene"); return; }
+  // In a car (a mission's later cutscenes come after a drive): out of it first. It used to be skipped without a
+  // word, so the guest saw a mission's first cutscene and only the dialogue lines of the next ones (11-15).
+  try {
+    if (ridingOutside) getOffOutside(me);
+    if (me.isInAnyCar()) { const c = me.getCoordinates(); me.warpFromCarToCoord(c.x + 2.5, c.y, c.z); pause(100); }
+  } catch (e) { err(`[sa-coop] cutscene ${name}, out of the car: ${e}`); }
+  if (me.isInAnyCar()) { say("SA Co-op: your friend is watching a cutscene"); return; }
   const area = Number(a), at = { x: Number(x), y: Number(y), z: Number(z) };
   const placed = area >= 0 && area <= 255 && [at.x, at.y, at.z].every(Number.isFinite) && Math.abs(at.x) < 6000 && Math.abs(at.y) < 6000;
   playingCut = true;
@@ -1923,7 +1933,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.9.4", EV_VERSION = 21;
+const VERSION = "0.9.5", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
