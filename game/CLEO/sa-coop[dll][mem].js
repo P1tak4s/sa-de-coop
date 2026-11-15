@@ -206,7 +206,7 @@ function remoteWithCar(car) {
 // ---- our state ------------------------------------------------------------------------------------------
 function writeMine(me) {
   const p = me.getCoordinates();
-  let v = { x: 0, y: 0, z: 0 }, q = { x: 0, y: 0, z: 0, w: 1 }, carSpeed = 0, inCar = 0, carModel = 0, carHealth = 0, carColor = 0;
+  let v = { x: 0, y: 0, z: 0 }, q = { x: 0, y: 0, z: 0, w: 1 }, carSpeed = 0, inCar = 0, carModel = 0, carHealth = 0, carColor = 0, burnout = false;
   if (ridingOutside && !Car.DoesExist(ridingOutside.car)) getOffOutside(me);
   if (ridingOutside) {
     const c = ridingOutside.car.getCoordinates();
@@ -231,6 +231,8 @@ function writeMine(me) {
       carModel = car.getModel();
       carHealth = car.getHealth();
       try { v = car.getSpeedVector(); } catch (e) {}
+      // burnout: gas and brake held while standing (pad buttons 16 and 14, the keyboard feeds the same pad)
+      try { burnout = carSpeed < 3 && Pad.GetState(0, 16) > 0 && Pad.GetState(0, 14) > 0; } catch (e) {}
       // colours ride along: primary in flags bits 24..31, secondary in carHealth bits 16..23, bit 24 = colours sent
       try {
         const cc = Object.values(car.getColors());
@@ -259,6 +261,7 @@ function writeMine(me) {
   try { flags |= Math.min(6, player.storeWantedLevel()) << 8; } catch (e) {}
   try { flags |= (api.coop_my_skin() & 0xff) << 16; } catch (e) {}
   flags |= carColor << 24;
+  if (burnout) flags |= 8;
   Memory.WriteI32(mine + I.weapon, weapon, false, false);
   Memory.WriteI32(mine + I.flags, flags, false, false);
   api.coop_send(mine);
@@ -406,14 +409,17 @@ function driveRemote(r, s, now) {
   const err = Math.sqrt(ex * ex + ey * ey + ez * ez);
   const speed = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
   r.car.setQuaternion(s.qx, s.qy, s.qz, s.qw);
-  // far off (a jump, a respawn): put it where it should be. The limit grows with speed: a fixed 2 m made a fast car
-  // jump on every late packet (11-15: "lags a lot" while driving)
-  if (err > 3 + speed * 0.2) {
+  // far off (a jump, a respawn): put it where it should be
+  if (err > 8 + speed * 0.3) {
     r.car.setCoordinatesNoOffset(tx, ty, tz);
     const fx0 = 2 * (s.qx * s.qy - s.qw * s.qz), fy0 = 1 - 2 * (s.qx * s.qx + s.qz * s.qz);
     r.car.setForwardSpeed(r.vx * fx0 + r.vy * fy0 < 0 ? -speed : speed);
     return;
   }
+  // off course by more than a metre (the speed below only corrects along the road, a turn leaves it beside the
+  // line): a third of the way back each frame. One big jump every few seconds threw a passenger about (11-15:
+  // "you teleport when your friend drives"). Moving it stops it, the speed below sets it going again.
+  if (err > 1) r.car.setCoordinatesNoOffset(c.x + ex * 0.3, c.y + ey * 0.3, c.z + ez * 0.3);
   // close enough: the game's physics drives it (wheels turn); catch up or fall back through the speed
   // which way the car faces (quaternion applied to +y): moving against it is reverse
   const fx = 2 * (s.qx * s.qy - s.qw * s.qz), fy = 1 - 2 * (s.qx * s.qx + s.qz * s.qz);
@@ -425,7 +431,10 @@ function driveRemote(r, s, now) {
   if (now - (r.lastDrive || 0) > 300) {
     r.lastDrive = now;
     try {
-      if (speed > 0.5 && sign > 0) {
+      if (s.flags & 8) {
+        // their burnout: the copy's driver floors it while we hold the car in place, so the wheels spin and smoke
+        r.car.setTempAction(8, 400); // TempAction.GoForward
+      } else if (speed > 0.5 && sign > 0) {
         r.car.setCruiseSpeed(Math.max(10, speed * 3.6));
         r.car.gotoCoordinatesAccurate(tx + fx * 25, ty + fy * 25, tz);
       } else {
