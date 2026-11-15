@@ -1261,14 +1261,34 @@ function storyTick(now) {
   // host: destination blips (type 4 = coord) every second when they change
   if (now - lastBlipsAt < 1000) return;
   lastBlipsAt = now;
+  // The objective on the map: blips on a place (type 4), and on a car (1) or a person (2) the mission points at
+  // ("get in the car", "follow him"). Not ours (friends and their cars) and not mission peds (their copies in the
+  // guest's game carry a blip of their own). 11-15: "the same objective must show for both".
   const parts = [];
-  for (let i = 0; i < 250 && parts.length < 4; i++) {
+  const mine = new Set(), missionPeds = missionHandles();
+  for (const r of remotes) { if (r) { mine.add(+r.ped); if (r.car) mine.add(+r.car); if (r.parked) mine.add(+r.parked); } }
+  for (let i = 0; i < 250 && parts.length < 5; i++) {
     const e = SRVA.radar + i * 0x30;
     if (!(Memory.ReadU8(e + 0x29, false, true) & 2)) continue;
-    const f = Memory.ReadU8(e + 0x2A, false, true);
-    if (((f >> 2) & 15) !== 4 || !(f & 3)) continue;
-    const x = Memory.ReadFloat(e + 8, false, true), y = Memory.ReadFloat(e + 12, false, true), z = Memory.ReadFloat(e + 16, false, true);
-    parts.push(`${x.toFixed(1)},${y.toFixed(1)},${z.toFixed(1)},${Memory.ReadU32(e, false, true) & 0xff}`);
+    const f = Memory.ReadU8(e + 0x2A, false, true), kind = (f >> 2) & 15;
+    if (!(f & 3)) continue;
+    // +0x28 is the icon: 0 = a plain marker, which is what a mission's target is. Shops, safehouses and the like
+    // have an icon; before 11-15 the first four of those were sent instead of the mission's target (seen in the
+    // running game: 86 icon blips ahead of the one real marker), so the guest never got the objective on its map.
+    if (Memory.ReadU8(e + 0x28, false, true) !== 0) continue;
+    let pos = null;
+    if (kind === 4) {
+      pos = { x: Memory.ReadFloat(e + 8, false, true), y: Memory.ReadFloat(e + 12, false, true), z: Memory.ReadFloat(e + 16, false, true) };
+    } else if (kind === 1 || kind === 2) {
+      const h = Memory.ReadI32(e + 4, false, true);
+      if (h <= 0 || mine.has(h) || (kind === 2 && missionPeds.has(h))) continue;
+      try {
+        if (kind === 1 && Car.DoesExist(h)) pos = new Car(h).getCoordinates();
+        else if (kind === 2 && Char.DoesExist(h)) pos = new Char(h).getCoordinates();
+      } catch (e2) {}
+    }
+    if (!pos || ![pos.x, pos.y, pos.z].every(Number.isFinite)) continue;
+    parts.push(`${pos.x.toFixed(0)},${pos.y.toFixed(0)},${pos.z.toFixed(0)},${Memory.ReadU32(e, false, true) & 0xff}`);
   }
   const msg = parts.join(";");
   if (msg !== lastBlipsSent) { lastBlipsSent = msg; sendEvent(EVS.BLIPS, msg || "-"); }
@@ -1703,7 +1723,7 @@ function leaveSharedWorld() {
 // ---- both must run the same version: say so in the game when they do not ---------------------------------------
 // The update happens when SA-Coop.exe is started, not when the game is started from Steam: in the first sessions
 // the two games were several versions apart without anyone seeing it. Keep VERSION equal to launcher/Cargo.toml.
-const VERSION = "0.8.17", EV_VERSION = 21;
+const VERSION = "0.8.18", EV_VERSION = 21;
 let versionSentAt = 0, versionToldAt = 0;
 function versionTick(t) {
   if (t - versionSentAt < 20000) return;
